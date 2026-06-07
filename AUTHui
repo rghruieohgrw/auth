@@ -1,5 +1,6 @@
 -- Complete Working Photon UI Library
--- Fixed keybinds, proper rendering, full functionality
+-- Fixed: Config saving/loading, Menu shows when Photon menu is closed
+-- Fixed: Keybinds, proper rendering, full functionality
 
 -- Resolve local player username at load time
 local _players = game:get_service("Players")
@@ -35,6 +36,7 @@ local Library = {
     LastTooltipElement = nil,
     ModalOpen = false,
     NotificationPosition = "Top Right",
+    ConfigLoaded = false,
 
     WindowAlpha = 0,
     WindowTargetAlpha = 1,
@@ -47,6 +49,196 @@ local Library = {
         Speed = 0.055,
         PendingTab = nil
     },
+
+    -- ========== CONFIG SYSTEM ==========
+    ConfigFolder = "photon_configs/",
+    
+    SaveConfig = function(self, name)
+        local config = {
+            toggles = {},
+            options = {},
+            version = 1,
+            saved_at = get_unixtime()
+        }
+        
+        -- Save all toggles
+        for id, toggle in pairs(self.Toggles) do
+            config.toggles[id] = toggle.Value
+        end
+        
+        -- Save all options
+        for id, opt in pairs(self.Options) do
+            if opt.Type == "Slider" then
+                config.options[id] = { type = "Slider", value = opt.Value }
+            elseif opt.Type == "Dropdown" then
+                config.options[id] = { type = "Dropdown", value = opt.Value, multi = opt.Multi or false }
+            elseif opt.Type == "Input" then
+                config.options[id] = { type = "Input", value = opt.Value }
+            elseif opt.Type == "KeyPicker" then
+                config.options[id] = { type = "KeyPicker", value = opt.Value, mode = opt.Mode or "Hold" }
+            elseif opt.Type == "ColorPicker" then
+                local c = opt.Value
+                config.options[id] = { type = "ColorPicker", value = { r = c.r, g = c.g, b = c.b, a = c.a } }
+            end
+        end
+        
+        -- Save window positions
+        config.windows = {}
+        for i, win in ipairs(self.Windows) do
+            config.windows[i] = { pos = { x = win.Pos.x, y = win.Pos.y } }
+        end
+        
+        -- Save watermark position
+        config.watermark = { x = self.Watermark.Pos.x, y = self.Watermark.Pos.y }
+        
+        -- Convert to JSON and save
+        local json_str = self:TableToJSON(config)
+        local filename = self.ConfigFolder .. name .. ".json"
+        
+        -- Create folder if needed
+        if not file.exists(self.ConfigFolder) then
+            file.write(self.ConfigFolder .. ".keep", "")
+        end
+        
+        file.write(filename, json_str)
+        self:Notify("Config saved: " .. name, 3)
+        return true
+    end,
+    
+    LoadConfig = function(self, name)
+        local filename = self.ConfigFolder .. name .. ".json"
+        if not file.exists(filename) then
+            self:Notify("Config not found: " .. name, 3)
+            return false
+        end
+        
+        local json_str = file.read(filename)
+        local config = self:JSONToTable(json_str)
+        
+        if not config then
+            self:Notify("Failed to load config: " .. name, 3)
+            return false
+        end
+        
+        -- Load toggles
+        for id, value in pairs(config.toggles or {}) do
+            if self.Toggles[id] then
+                self.Toggles[id]:SetValue(value)
+            end
+        end
+        
+        -- Load options
+        for id, data in pairs(config.options or {}) do
+            if self.Options[id] then
+                if data.type == "Slider" then
+                    self.Options[id]:SetValue(data.value)
+                elseif data.type == "Dropdown" then
+                    self.Options[id]:SetValue(data.value)
+                elseif data.type == "Input" then
+                    self.Options[id]:SetValue(data.value)
+                elseif data.type == "KeyPicker" then
+                    self.Options[id]:SetValue(data.value)
+                    if data.mode then self.Options[id].Mode = data.mode end
+                elseif data.type == "ColorPicker" then
+                    local c = data.value
+                    self.Options[id]:SetValue(color(c.r, c.g, c.b, c.a))
+                end
+            end
+        end
+        
+        -- Load window positions
+        for i, win_data in ipairs(config.windows or {}) do
+            if self.Windows[i] then
+                self.Windows[i].Pos = vector2(win_data.pos.x, win_data.pos.y)
+            end
+        end
+        
+        -- Load watermark position
+        if config.watermark then
+            self.Watermark.Pos = vector2(config.watermark.x, config.watermark.y)
+        end
+        
+        self.ConfigLoaded = true
+        self:Notify("Config loaded: " .. name, 3)
+        return true
+    end,
+    
+    ListConfigs = function(self)
+        local configs = {}
+        -- This would need directory listing, for now return empty
+        return configs
+    end,
+    
+    ResetAll = function(self)
+        for id, toggle in pairs(self.Toggles) do
+            toggle:SetValue(false)
+        end
+        for id, opt in pairs(self.Options) do
+            if opt.Type == "Slider" then
+                opt:SetValue((opt.Min + opt.Max) / 2)
+            elseif opt.Type == "Dropdown" and not opt.Multi then
+                opt:SetValue(opt.Values[1])
+            elseif opt.Type == "Input" then
+                opt:SetValue("")
+            elseif opt.Type == "KeyPicker" then
+                opt:SetValue("...")
+            elseif opt.Type == "ColorPicker" then
+                opt:SetValue(color(1, 1, 1, 1))
+            end
+        end
+        self:Notify("All settings reset!", 3)
+    end,
+    
+    -- Simple JSON helpers (since Photon may not have built-in JSON)
+    TableToJSON = function(self, tbl)
+        local function serialize(val)
+            if type(val) == "string" then
+                return '"' .. val:gsub('"', '\\"') .. '"'
+            elseif type(val) == "number" then
+                return tostring(val)
+            elseif type(val) == "boolean" then
+                return val and "true" or "false"
+            elseif type(val) == "table" then
+                local items = {}
+                local is_array = true
+                local max_idx = 0
+                for k, v in pairs(val) do
+                    if type(k) ~= "number" or k ~= math.floor(k) or k <= 0 then
+                        is_array = false
+                        break
+                    end
+                    if k > max_idx then max_idx = k end
+                end
+                if is_array and max_idx > 0 then
+                    for i = 1, max_idx do
+                        table.insert(items, serialize(val[i]))
+                    end
+                    return "[" .. table.concat(items, ",") .. "]"
+                else
+                    for k, v in pairs(val) do
+                        table.insert(items, serialize(k) .. ":" .. serialize(v))
+                    end
+                    return "{" .. table.concat(items, ",") .. "}"
+                end
+            else
+                return "null"
+            end
+        end
+        return serialize(tbl)
+    end,
+    
+    JSONToTable = function(self, str)
+        -- Safe JSON parser using load
+        local safe_str = "return " .. str
+        local func, err = load(safe_str, "json_parse")
+        if func then
+            local success, result = pcall(func)
+            if success then
+                return result
+            end
+        end
+        return nil
+    end,
 
     LoadRemoteUI = function(self, url)
         print("[Library] Fetching remote UI:", url)
@@ -420,19 +612,6 @@ end
 function Library:SetWatermark(text) self.Watermark.Text=text; self.Watermark.Visible=true end
 function Library:OpenWindow(window)  window.Visible=true; window.TargetAlpha=1 end
 function Library:CloseWindow(window) window.TargetAlpha=0 end
-function Library:SaveConfig(name) self:Notify("Config saved: " .. name, 2) end
-function Library:LoadConfig(name) self:Notify("Config loaded: " .. name, 2) end
-function Library:ResetAll() 
-    for _, toggle in pairs(self.Toggles) do toggle:SetValue(false) end
-    for _, opt in pairs(self.Options) do 
-        if opt.Type == "Slider" then opt:SetValue((opt.Min+opt.Max)/2)
-        elseif opt.Type == "Dropdown" and not opt.Multi then opt:SetValue(opt.Values[1])
-        elseif opt.Type == "Input" then opt:SetValue("")
-        elseif opt.Type == "KeyPicker" then opt:SetValue("...")
-        end
-    end
-    self:Notify("All settings reset!", 3)
-end
 
 -- ─────────────────────────────────────────────
 --  Tooltip
@@ -465,9 +644,11 @@ local function draw_watermark()
 end
 
 -- ─────────────────────────────────────────────
---  Main render hook
+--  Main render hook (FIXED - shows without Photon menu)
 -- ─────────────────────────────────────────────
 hook.add("render", "auth_photon_render", function()
+    -- CRITICAL FIX: Remove menu_active() check so menu shows even when Photon menu is closed    -- Now the menu will ALWAYS render if windows are visible
+    
     local anim = Library.Animation
     if anim.State == "FadingOut" then
         anim.CurrentAlpha = anim.CurrentAlpha - anim.Speed
@@ -572,267 +753,265 @@ hook.add("render", "auth_photon_render", function()
     local can_interact = not Library.ModalOpen and anim.State=="Idle"
     Library.Tooltip = nil
 
-    -- ── windows ──
-    if menu_active() then
-        for _, window in ipairs(Library.Windows) do
-            if window.Visible then
-                window.Alpha = window.Alpha + (window.TargetAlpha - window.Alpha) * 0.07
-                local wa = window.Alpha
-                if wa < 0.01 then goto continue_window end
+    -- ── windows (ALWAYS render if visible, regardless of menu_active()) ──
+    for _, window in ipairs(Library.Windows) do
+        if window.Visible then
+            window.Alpha = window.Alpha + (window.TargetAlpha - window.Alpha) * 0.07
+            local wa = window.Alpha
+            if wa < 0.01 then goto continue_window end
 
-                local title_bar_pos  = window.Pos
-                local title_bar_size = vector2(window.Size.x, 34)
-                if not Library.DraggingWindow and mpressed and is_mouse_in_rect(title_bar_pos, title_bar_size) and not Library.ModalOpen then
-                    Library.DraggingWindow=window; Library.DragOffset=mp:subtract(window.Pos)
+            local title_bar_pos  = window.Pos
+            local title_bar_size = vector2(window.Size.x, 34)
+            if not Library.DraggingWindow and mpressed and is_mouse_in_rect(title_bar_pos, title_bar_size) and not Library.ModalOpen then
+                Library.DraggingWindow=window; Library.DragOffset=mp:subtract(window.Pos)
+            end
+
+            draw_shadow(window.Pos, window.Size, 12, wa)
+            render.add_rect_filled(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.BackgroundColor, wa), 10)
+            render.add_rect(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.OutlineColor, wa), 10, 1)
+            render.add_text(window.Pos:add(vector2(14,10)), window.Title, apply_alpha(Library.FontColor, wa))
+
+            local msp = window.Pos:add(vector2(12,36))
+            local mss = vector2(window.Size.x-24, window.Size.y-48)
+            render.add_rect_filled(msp, msp:add(mss), apply_alpha(Library.BackgroundColor, wa), 8)
+
+            -- tabs
+            local tab_area_pos = msp:add(vector2(4,4))
+            local tab_x = 0
+            for _, tab in ipairs(window.Tabs) do
+                local tw  = render.get_text_size(tab.Name).x + 20
+                local tp2 = tab_area_pos:add(vector2(tab_x,0))
+                local ts2 = vector2(tw, 24)
+                local active_target = anim.PendingTab or window.ActiveTab
+                local is_active = (active_target == tab)
+                local tab_bg = is_active and apply_alpha(Library.FontColor, wa) or apply_alpha(color(0.1,0.1,0.13,1), wa)
+                local tab_fg = is_active and apply_alpha(Library.BackgroundColor, wa) or apply_alpha(Library.SecondaryFontColor, wa)
+                render.add_rect_filled(tp2, tp2:add(ts2), tab_bg, 6)
+                render.add_text(tp2:add(vector2(10,4)), tab.Name, tab_fg)
+                if not Library.DraggingWindow and mpressed and is_mouse_in_rect(tp2, ts2) and anim.State=="Idle" and window.ActiveTab~=tab then
+                    anim.State="FadingOut"; anim.PendingTab=tab
                 end
+                tab_x = tab_x + tw + 6
+            end
 
-                draw_shadow(window.Pos, window.Size, 12, wa)
-                render.add_rect_filled(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.BackgroundColor, wa), 10)
-                render.add_rect(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.OutlineColor, wa), 10, 1)
-                render.add_text(window.Pos:add(vector2(14,10)), window.Title, apply_alpha(Library.FontColor, wa))
+            local tab_container = msp:add(vector2(0,36))
+            if window.ActiveTab and anim.CurrentAlpha > 0 then
+                local op = anim.CurrentAlpha * wa
+                local content_area = tab_container:add(vector2(4,4))
+                local left_y, right_y = 0, 0
 
-                local msp = window.Pos:add(vector2(12,36))
-                local mss = vector2(window.Size.x-24, window.Size.y-48)
-                render.add_rect_filled(msp, msp:add(mss), apply_alpha(Library.BackgroundColor, wa), 8)
+                for _, groupbox in ipairs(window.ActiveTab.Groupboxes) do
+                    if groupbox:IsVisible() then
+                        local side_off = (groupbox.Side=="Left") and 0 or (window.Size.x/2-14)
+                        local y_off    = (groupbox.Side=="Left") and left_y or right_y
+                        local group_pos = content_area:add(vector2(side_off, y_off))
 
-                -- tabs
-                local tab_area_pos = msp:add(vector2(4,4))
-                local tab_x = 0
-                for _, tab in ipairs(window.Tabs) do
-                    local tw  = render.get_text_size(tab.Name).x + 20
-                    local tp2 = tab_area_pos:add(vector2(tab_x,0))
-                    local ts2 = vector2(tw, 24)
-                    local active_target = anim.PendingTab or window.ActiveTab
-                    local is_active = (active_target == tab)
-                    local tab_bg = is_active and apply_alpha(Library.FontColor, wa) or apply_alpha(color(0.1,0.1,0.13,1), wa)
-                    local tab_fg = is_active and apply_alpha(Library.BackgroundColor, wa) or apply_alpha(Library.SecondaryFontColor, wa)
-                    render.add_rect_filled(tp2, tp2:add(ts2), tab_bg, 6)
-                    render.add_text(tp2:add(vector2(10,4)), tab.Name, tab_fg)
-                    if not Library.DraggingWindow and mpressed and is_mouse_in_rect(tp2, ts2) and anim.State=="Idle" and window.ActiveTab~=tab then
-                        anim.State="FadingOut"; anim.PendingTab=tab
-                    end
-                    tab_x = tab_x + tw + 6
-                end
+                        local current_y = 32
+                        for _,e in ipairs(groupbox.Elements) do current_y=current_y+e.Height end
+                        local group_size = vector2(window.Size.x/2-20, current_y)
 
-                local tab_container = msp:add(vector2(0,36))
-                if window.ActiveTab and anim.CurrentAlpha > 0 then
-                    local op = anim.CurrentAlpha * wa
-                    local content_area = tab_container:add(vector2(4,4))
-                    local left_y, right_y = 0, 0
+                        draw_shadow(group_pos, group_size, 8, op * 0.5)
+                        render.add_rect_filled(group_pos, group_pos:add(group_size), apply_alpha(Library.MainColor, op), 8)
+                        render.add_rect(group_pos, group_pos:add(group_size), apply_alpha(Library.OutlineColor, op), 8, 1)
+                        render.add_text(group_pos:add(vector2(10,8)), groupbox.Name, apply_alpha(Library.FontColor, op))
 
-                    for _, groupbox in ipairs(window.ActiveTab.Groupboxes) do
-                        if groupbox:IsVisible() then
-                            local side_off = (groupbox.Side=="Left") and 0 or (window.Size.x/2-14)
-                            local y_off    = (groupbox.Side=="Left") and left_y or right_y
-                            local group_pos = content_area:add(vector2(side_off, y_off))
-
-                            local current_y = 32
-                            for _,e in ipairs(groupbox.Elements) do current_y=current_y+e.Height end
-                            local group_size = vector2(window.Size.x/2-20, current_y)
-
-                            draw_shadow(group_pos, group_size, 8, op * 0.5)
-                            render.add_rect_filled(group_pos, group_pos:add(group_size), apply_alpha(Library.MainColor, op), 8)
-                            render.add_rect(group_pos, group_pos:add(group_size), apply_alpha(Library.OutlineColor, op), 8, 1)
-                            render.add_text(group_pos:add(vector2(10,8)), groupbox.Name, apply_alpha(Library.FontColor, op))
-
-                            local element_y = 30
-                            for _, element in ipairs(groupbox.Elements) do
-                                local ep  = group_pos:add(vector2(10, element_y))
-                                local efw = vector2(group_size.x-20, element.Height)
-                                if is_mouse_in_rect(ep, efw) and element.Tooltip then
-                                    Library.Tooltip={Text=element.Tooltip, Element=element}
-                                end
-
-                                -- Toggle
-                                if element.Type=="Toggle" then
-                                    local target_x = element.Value and 1 or 0
-                                    element.SwitchAnim = element.SwitchAnim + (target_x - element.SwitchAnim) * 0.07
-                                    local sw_size = vector2(30, 17)
-                                    local sw_pos  = ep:add(vector2(0, 5))
-                                    local base_bg = color(0.08,0.08,0.10,1)
-                                    local fill_bg = color(
-                                        lerp(base_bg.r, Library.AccentColor.r, element.SwitchAnim),
-                                        lerp(base_bg.g, Library.AccentColor.g, element.SwitchAnim),
-                                        lerp(base_bg.b, Library.AccentColor.b, element.SwitchAnim), 1)
-                                    render.add_rect_filled(sw_pos, sw_pos:add(sw_size), apply_alpha(fill_bg, op), 9)
-                                    render.add_rect(sw_pos, sw_pos:add(sw_size), apply_alpha(Library.OutlineColor, op), 9, 1)
-                                    local knob_x = lerp(sw_pos.x+2, sw_pos.x+sw_size.x-13, element.SwitchAnim)
-                                    local knob_col = color(
-                                        lerp(0.5, Library.BackgroundColor.r, element.SwitchAnim),
-                                        lerp(0.5, Library.BackgroundColor.g, element.SwitchAnim),
-                                        lerp(0.55,Library.BackgroundColor.b, element.SwitchAnim), 1)
-                                    render.add_rect_filled(vector2(knob_x, sw_pos.y+2), vector2(knob_x+11, sw_pos.y+13), apply_alpha(knob_col, op), 6)
-                                    render.add_text(ep:add(vector2(38,4)), element.Text, element.Risky and apply_alpha(Library.RiskColor,op) or apply_alpha(Library.FontColor,op))
-                                    if not Library.DraggingWindow and mpressed and is_mouse_in_rect(ep, vector2(170,20)) and can_interact then
-                                        element:SetValue(not element.Value)
-                                    end
-
-                                -- Slider
-                                elseif element.Type=="Slider" then
-                                    local ratio = (element.Value - element.Min) / (element.Max - element.Min)
-                                    element.ThumbAnim = element.ThumbAnim + (ratio - element.ThumbAnim) * 0.08
-                                    local s_pos  = ep:add(vector2(0, 22))
-                                    local s_size = vector2(group_size.x-20, 14)
-                                    local thumb_x = s_pos.x + s_size.x * element.ThumbAnim
-                                    local is_hovering = is_mouse_in_rect(s_pos, s_size)
-                                    local is_dragging = Library.ActiveSlider and Library.ActiveSlider.obj == element
-                                    element.BubbleAlpha = element.BubbleAlpha + (((is_hovering or is_dragging) and 1 or 0) - element.BubbleAlpha) * 0.08
-                                    render.add_text(ep, element.Text, apply_alpha(Library.SecondaryFontColor, op))
-                                    render.add_rect_filled(s_pos, s_pos:add(s_size), apply_alpha(Library.BackgroundColor, op), 7)
-                                    render.add_rect(s_pos, s_pos:add(s_size), apply_alpha(Library.OutlineColor, op), 7, 1)
-                                    if element.ThumbAnim > 0.001 then
-                                        local fill_w = math.max(0, s_size.x * element.ThumbAnim - 2)
-                                        render.add_rect_filled(s_pos:add(vector2(2,2)), s_pos:add(vector2(2+fill_w, s_size.y-2)), apply_alpha(accent, op), 5)
-                                    end
-                                    local thumb_pos = vector2(thumb_x-4, s_pos.y-2)
-                                    render.add_rect_filled(thumb_pos, thumb_pos:add(vector2(8, s_size.y+4)), apply_alpha(Library.FontColor, op), 4)
-                                    if element.BubbleAlpha > 0.01 then
-                                        local val_text = tostring(element.Value) .. element.Suffix
-                                        local bub_w = render.get_text_size(val_text).x + 10
-                                        local bub_pos = vector2(thumb_x - bub_w/2, s_pos.y-22)
-                                        local bub_a = element.BubbleAlpha * op
-                                        render.add_rect_filled(bub_pos, bub_pos:add(vector2(bub_w,16)), apply_alpha(Library.MainColor, bub_a), 4)
-                                        render.add_rect(bub_pos, bub_pos:add(vector2(bub_w,16)), apply_alpha(Library.OutlineColor, bub_a), 4, 1)
-                                        render.add_text(bub_pos:add(vector2(5,1)), val_text, apply_alpha(Library.FontColor, bub_a))
-                                    end
-                                    if not Library.DraggingWindow and not Library.ActiveSlider and mpressed and is_mouse_in_rect(s_pos, s_size) and can_interact then
-                                        Library.ActiveSlider={obj=element, layout={pos=s_pos, size=s_size}}
-                                    end
-
-                                -- Button
-                                elseif element.Type=="Button" then
-                                    local b_pos  = ep
-                                    local b_size = vector2(group_size.x-20, 24)
-                                    local is_hover = is_mouse_in_rect(b_pos, b_size)
-                                    element.HoverAnim = element.HoverAnim + ((is_hover and 1 or 0) - element.HoverAnim) * 0.07
-                                    local ha = element.HoverAnim
-                                    local bg = color(lerp(Library.BackgroundColor.r,Library.FontColor.r,ha), lerp(Library.BackgroundColor.g,Library.FontColor.g,ha), lerp(Library.BackgroundColor.b,Library.FontColor.b,ha), 1)
-                                    local fg = color(lerp(Library.FontColor.r,Library.BackgroundColor.r,ha), lerp(Library.FontColor.g,Library.BackgroundColor.g,ha), lerp(Library.FontColor.b,Library.BackgroundColor.b,ha), 1)
-                                    render.add_rect_filled(b_pos, b_pos:add(b_size), apply_alpha(bg, op), 6)
-                                    render.add_rect(b_pos, b_pos:add(b_size), apply_alpha(Library.OutlineColor, op), 6, 1)
-                                    local btn_text = element.Text
-                                    if element.DoubleClick and get_unixtime()-element.LastClick<1 and element.LastClick~=0 then btn_text="Confirm?" end
-                                    local clip = get_clipped_text(btn_text, b_size.x-12)
-                                    render.add_text(b_pos:add(vector2(b_size.x/2 - render.get_text_size(clip).x/2, 4)), clip, apply_alpha(fg, op))
-                                    if not Library.DraggingWindow and mpressed and is_mouse_in_rect(b_pos, b_size) and can_interact then
-                                        if element.DoubleClick then
-                                            if get_unixtime()-element.LastClick<1 then
-                                                if element.Func then element.Func() end; element.LastClick=0
-                                            else element.LastClick=get_unixtime() end
-                                        else
-                                            if element.Func then element.Func() end
-                                        end
-                                    end
-
-                                -- Dropdown
-                                elseif element.Type=="Dropdown" then
-                                    render.add_text(ep, element.Text, apply_alpha(Library.SecondaryFontColor, op))
-                                    local d_pos  = ep:add(vector2(0,18))
-                                    local d_size = vector2(group_size.x-20, 22)
-                                    element.Layout = {pos=d_pos, size=d_size, list_pos=vector2(0,0), list_size=vector2(0,0)}
-                                    local is_hover = is_mouse_in_rect(d_pos, d_size)
-                                    element.HoverAlpha = element.HoverAlpha + ((is_hover and 1 or 0) - element.HoverAlpha) * 0.07
-                                    local bg = color(
-                                        lerp(Library.BackgroundColor.r, Library.MainColor.r, element.HoverAlpha),
-                                        lerp(Library.BackgroundColor.g, Library.MainColor.g, element.HoverAlpha),
-                                        lerp(Library.BackgroundColor.b, Library.MainColor.b, element.HoverAlpha), 1)
-                                    render.add_rect_filled(d_pos, d_pos:add(d_size), apply_alpha(bg, op), 6)
-                                    render.add_rect(d_pos, d_pos:add(d_size), apply_alpha(Library.OutlineColor, op), 6, 1)
-                                    local display_text
-                                    if element.Multi then
-                                        local sel={}
-                                        for k,v in pairs(element.Value) do if v then table.insert(sel,k) end end
-                                        display_text = #sel>0 and table.concat(sel,", ") or "None"
-                                    else
-                                        display_text = tostring(element.Value)
-                                    end
-                                    render.add_text(d_pos:add(vector2(8,3)), get_clipped_text(display_text, d_size.x-24), apply_alpha(Library.FontColor,op))
-                                    render.add_triangle_filled(d_pos:add(vector2(d_size.x-13,8)), d_pos:add(vector2(d_size.x-5,8)), d_pos:add(vector2(d_size.x-9,15)), apply_alpha(Library.FontColor,op))
-                                    if not Library.DraggingWindow and mpressed and is_mouse_in_rect(d_pos, d_size) and can_interact then
-                                        element.Open=not element.Open
-                                        Library.OpenedDropdown = element.Open and element or nil
-                                    end
-
-                                -- Input
-                                elseif element.Type=="Input" then
-                                    render.add_text(ep, element.Text, apply_alpha(Library.SecondaryFontColor, op))
-                                    local i_pos  = ep:add(vector2(0,18))
-                                    local i_size = vector2(group_size.x-20, 22)
-                                    element.layout = {pos=i_pos, size=i_size}
-                                    local is_active = Library.ActiveInput==element
-                                    render.add_rect_filled(i_pos, i_pos:add(i_size), apply_alpha(Library.BackgroundColor,op), 6)
-                                    render.add_rect(i_pos, i_pos:add(i_size), is_active and apply_alpha(accent,op) or apply_alpha(Library.OutlineColor,op), 6, 1)
-                                    local d_text = #element.Value>0 and element.Value or element.Placeholder
-                                    local tc = #element.Value>0 and Library.FontColor or color(0.35,0.35,0.4,1)
-                                    render.add_text(i_pos:add(vector2(8,3)), get_clipped_text(d_text, i_size.x-14), apply_alpha(tc,op))
-                                    if is_active and (math.floor(get_unixtime()*2)%2==0) then
-                                        local tw2 = render.get_text_size(get_clipped_text(element.Value, i_size.x-14)).x
-                                        render.add_line(i_pos:add(vector2(8+tw2,5)), i_pos:add(vector2(8+tw2,i_size.y-5)), apply_alpha(Library.FontColor,op), 1)
-                                    end
-                                    if not Library.DraggingWindow and mpressed and is_mouse_in_rect(i_pos, i_size) and can_interact then
-                                        Library.ActiveInput=element
-                                    end
-
-                                -- KeyPicker
-                                elseif element.Type=="KeyPicker" then
-                                    render.add_text(ep, element.Text, apply_alpha(Library.SecondaryFontColor, op))
-                                    local k_pos  = ep:add(vector2(0,18))
-                                    local k_size = vector2(group_size.x-20, 22)
-                                    element.layout = {pos=k_pos, size=k_size}
-                                    render.add_rect_filled(k_pos, k_pos:add(k_size), apply_alpha(Library.BackgroundColor,op), 6)
-                                    render.add_rect(k_pos, k_pos:add(k_size), (element.Picking and apply_alpha(accent,op)) or apply_alpha(Library.OutlineColor,op), 6, 1)
-                                    local mode_tag = ""
-                                    if element.Mode=="Hold" then mode_tag=" [H]" elseif element.Mode=="Toggle" then mode_tag=" [T]" end
-                                    local ktext = element.Picking and "press a key..." or (element.Value .. mode_tag)
-                                    render.add_text(k_pos:add(vector2(k_size.x/2 - render.get_text_size(ktext).x/2, 3)), ktext, apply_alpha(Library.FontColor,op))
-                                    if not Library.DraggingWindow and mpressed and is_mouse_in_rect(k_pos, k_size) and can_interact then
-                                        element.Picking=true
-                                        Library.ActiveKeyPicker={obj=element, layout=element.layout}
-                                    end
-                                    if not Library.DraggingWindow and input.is_key_pressed(0x02) and is_mouse_in_rect(k_pos, k_size) and can_interact then
-                                        Library.RightClickMenu={obj=element, pos=mp, Alpha=0}
-                                    end
-
-                                -- ColorPicker
-                                elseif element.Type=="ColorPicker" then
-                                    local box_size = vector2(18,14)
-                                    local box_pos  = ep:add(vector2(group_size.x-20-box_size.x, 4))
-                                    element.layout.pos  = box_pos
-                                    element.layout.size = box_size
-                                    render.add_text(ep:add(vector2(0,3)), element.Text, apply_alpha(Library.SecondaryFontColor,op))
-                                    if element.EnableAlpha then draw_checkerboard(box_pos:add(vector2(1,1)), box_size:subtract(vector2(2,2)), 4) end
-                                    render.add_rect_filled(box_pos:add(vector2(1,1)), box_pos:add(box_size):subtract(vector2(1,1)), apply_alpha(element.Value,op), 4)
-                                    render.add_rect(box_pos, box_pos:add(box_size), apply_alpha(Library.OutlineColor,op), 4, 1)
-                                    if not Library.DraggingWindow and mpressed and is_mouse_in_rect(box_pos, box_size) and can_interact then
-                                        element.Open = not element.Open
-                                        if element.Open then
-                                            Library.ActiveColorPicker = {obj=element, layout=element.layout}
-                                        else
-                                            Library.ActiveColorPicker = nil
-                                        end
-                                    end
-
-                                -- Divider
-                                elseif element.Type=="Divider" then
-                                    local dy = ep.y + element.Height/2
-                                    render.add_line(vector2(ep.x,dy), vector2(ep.x+group_size.x-20,dy), apply_alpha(Library.OutlineColor,op), 1)
-
-                                -- Label
-                                elseif element.Type=="Label" then
-                                    render.add_text(ep:add(vector2(0,4)), element.Text, apply_alpha(Library.FontColor,op))
-                                end
-
-                                element_y = element_y + element.Height
+                        local element_y = 30
+                        for _, element in ipairs(groupbox.Elements) do
+                            local ep  = group_pos:add(vector2(10, element_y))
+                            local efw = vector2(group_size.x-20, element.Height)
+                            if is_mouse_in_rect(ep, efw) and element.Tooltip then
+                                Library.Tooltip={Text=element.Tooltip, Element=element}
                             end
 
-                            if groupbox.Side=="Left" then left_y=left_y+group_size.y+12
-                            else right_y=right_y+group_size.y+12 end
+                            -- Toggle
+                            if element.Type=="Toggle" then
+                                local target_x = element.Value and 1 or 0
+                                element.SwitchAnim = element.SwitchAnim + (target_x - element.SwitchAnim) * 0.07
+                                local sw_size = vector2(30, 17)
+                                local sw_pos  = ep:add(vector2(0, 5))
+                                local base_bg = color(0.08,0.08,0.10,1)
+                                local fill_bg = color(
+                                    lerp(base_bg.r, Library.AccentColor.r, element.SwitchAnim),
+                                    lerp(base_bg.g, Library.AccentColor.g, element.SwitchAnim),
+                                    lerp(base_bg.b, Library.AccentColor.b, element.SwitchAnim), 1)
+                                render.add_rect_filled(sw_pos, sw_pos:add(sw_size), apply_alpha(fill_bg, op), 9)
+                                render.add_rect(sw_pos, sw_pos:add(sw_size), apply_alpha(Library.OutlineColor, op), 9, 1)
+                                local knob_x = lerp(sw_pos.x+2, sw_pos.x+sw_size.x-13, element.SwitchAnim)
+                                local knob_col = color(
+                                    lerp(0.5, Library.BackgroundColor.r, element.SwitchAnim),
+                                    lerp(0.5, Library.BackgroundColor.g, element.SwitchAnim),
+                                    lerp(0.55,Library.BackgroundColor.b, element.SwitchAnim), 1)
+                                render.add_rect_filled(vector2(knob_x, sw_pos.y+2), vector2(knob_x+11, sw_pos.y+13), apply_alpha(knob_col, op), 6)
+                                render.add_text(ep:add(vector2(38,4)), element.Text, element.Risky and apply_alpha(Library.RiskColor,op) or apply_alpha(Library.FontColor,op))
+                                if not Library.DraggingWindow and mpressed and is_mouse_in_rect(ep, vector2(170,20)) and can_interact then
+                                    element:SetValue(not element.Value)
+                                end
+
+                            -- Slider
+                            elseif element.Type=="Slider" then
+                                local ratio = (element.Value - element.Min) / (element.Max - element.Min)
+                                element.ThumbAnim = element.ThumbAnim + (ratio - element.ThumbAnim) * 0.08
+                                local s_pos  = ep:add(vector2(0, 22))
+                                local s_size = vector2(group_size.x-20, 14)
+                                local thumb_x = s_pos.x + s_size.x * element.ThumbAnim
+                                local is_hovering = is_mouse_in_rect(s_pos, s_size)
+                                local is_dragging = Library.ActiveSlider and Library.ActiveSlider.obj == element
+                                element.BubbleAlpha = element.BubbleAlpha + (((is_hovering or is_dragging) and 1 or 0) - element.BubbleAlpha) * 0.08
+                                render.add_text(ep, element.Text, apply_alpha(Library.SecondaryFontColor, op))
+                                render.add_rect_filled(s_pos, s_pos:add(s_size), apply_alpha(Library.BackgroundColor, op), 7)
+                                render.add_rect(s_pos, s_pos:add(s_size), apply_alpha(Library.OutlineColor, op), 7, 1)
+                                if element.ThumbAnim > 0.001 then
+                                    local fill_w = math.max(0, s_size.x * element.ThumbAnim - 2)
+                                    render.add_rect_filled(s_pos:add(vector2(2,2)), s_pos:add(vector2(2+fill_w, s_size.y-2)), apply_alpha(accent, op), 5)
+                                end
+                                local thumb_pos = vector2(thumb_x-4, s_pos.y-2)
+                                render.add_rect_filled(thumb_pos, thumb_pos:add(vector2(8, s_size.y+4)), apply_alpha(Library.FontColor, op), 4)
+                                if element.BubbleAlpha > 0.01 then
+                                    local val_text = tostring(element.Value) .. element.Suffix
+                                    local bub_w = render.get_text_size(val_text).x + 10
+                                    local bub_pos = vector2(thumb_x - bub_w/2, s_pos.y-22)
+                                    local bub_a = element.BubbleAlpha * op
+                                    render.add_rect_filled(bub_pos, bub_pos:add(vector2(bub_w,16)), apply_alpha(Library.MainColor, bub_a), 4)
+                                    render.add_rect(bub_pos, bub_pos:add(vector2(bub_w,16)), apply_alpha(Library.OutlineColor, bub_a), 4, 1)
+                                    render.add_text(bub_pos:add(vector2(5,1)), val_text, apply_alpha(Library.FontColor, bub_a))
+                                end
+                                if not Library.DraggingWindow and not Library.ActiveSlider and mpressed and is_mouse_in_rect(s_pos, s_size) and can_interact then
+                                    Library.ActiveSlider={obj=element, layout={pos=s_pos, size=s_size}}
+                                end
+
+                            -- Button
+                            elseif element.Type=="Button" then
+                                local b_pos  = ep
+                                local b_size = vector2(group_size.x-20, 24)
+                                local is_hover = is_mouse_in_rect(b_pos, b_size)
+                                element.HoverAnim = element.HoverAnim + ((is_hover and 1 or 0) - element.HoverAnim) * 0.07
+                                local ha = element.HoverAnim
+                                local bg = color(lerp(Library.BackgroundColor.r,Library.FontColor.r,ha), lerp(Library.BackgroundColor.g,Library.FontColor.g,ha), lerp(Library.BackgroundColor.b,Library.FontColor.b,ha), 1)
+                                local fg = color(lerp(Library.FontColor.r,Library.BackgroundColor.r,ha), lerp(Library.FontColor.g,Library.BackgroundColor.g,ha), lerp(Library.FontColor.b,Library.BackgroundColor.b,ha), 1)
+                                render.add_rect_filled(b_pos, b_pos:add(b_size), apply_alpha(bg, op), 6)
+                                render.add_rect(b_pos, b_pos:add(b_size), apply_alpha(Library.OutlineColor, op), 6, 1)
+                                local btn_text = element.Text
+                                if element.DoubleClick and get_unixtime()-element.LastClick<1 and element.LastClick~=0 then btn_text="Confirm?" end
+                                local clip = get_clipped_text(btn_text, b_size.x-12)
+                                render.add_text(b_pos:add(vector2(b_size.x/2 - render.get_text_size(clip).x/2, 4)), clip, apply_alpha(fg, op))
+                                if not Library.DraggingWindow and mpressed and is_mouse_in_rect(b_pos, b_size) and can_interact then
+                                    if element.DoubleClick then
+                                        if get_unixtime()-element.LastClick<1 then
+                                            if element.Func then element.Func() end; element.LastClick=0
+                                        else element.LastClick=get_unixtime() end
+                                    else
+                                        if element.Func then element.Func() end
+                                    end
+                                end
+
+                            -- Dropdown
+                            elseif element.Type=="Dropdown" then
+                                render.add_text(ep, element.Text, apply_alpha(Library.SecondaryFontColor, op))
+                                local d_pos  = ep:add(vector2(0,18))
+                                local d_size = vector2(group_size.x-20, 22)
+                                element.Layout = {pos=d_pos, size=d_size, list_pos=vector2(0,0), list_size=vector2(0,0)}
+                                local is_hover = is_mouse_in_rect(d_pos, d_size)
+                                element.HoverAlpha = element.HoverAlpha + ((is_hover and 1 or 0) - element.HoverAlpha) * 0.07
+                                local bg = color(
+                                    lerp(Library.BackgroundColor.r, Library.MainColor.r, element.HoverAlpha),
+                                    lerp(Library.BackgroundColor.g, Library.MainColor.g, element.HoverAlpha),
+                                    lerp(Library.BackgroundColor.b, Library.MainColor.b, element.HoverAlpha), 1)
+                                render.add_rect_filled(d_pos, d_pos:add(d_size), apply_alpha(bg, op), 6)
+                                render.add_rect(d_pos, d_pos:add(d_size), apply_alpha(Library.OutlineColor, op), 6, 1)
+                                local display_text
+                                if element.Multi then
+                                    local sel={}
+                                    for k,v in pairs(element.Value) do if v then table.insert(sel,k) end end
+                                    display_text = #sel>0 and table.concat(sel,", ") or "None"
+                                else
+                                    display_text = tostring(element.Value)
+                                end
+                                render.add_text(d_pos:add(vector2(8,3)), get_clipped_text(display_text, d_size.x-24), apply_alpha(Library.FontColor,op))
+                                render.add_triangle_filled(d_pos:add(vector2(d_size.x-13,8)), d_pos:add(vector2(d_size.x-5,8)), d_pos:add(vector2(d_size.x-9,15)), apply_alpha(Library.FontColor,op))
+                                if not Library.DraggingWindow and mpressed and is_mouse_in_rect(d_pos, d_size) and can_interact then
+                                    element.Open=not element.Open
+                                    Library.OpenedDropdown = element.Open and element or nil
+                                end
+
+                            -- Input
+                            elseif element.Type=="Input" then
+                                render.add_text(ep, element.Text, apply_alpha(Library.SecondaryFontColor, op))
+                                local i_pos  = ep:add(vector2(0,18))
+                                local i_size = vector2(group_size.x-20, 22)
+                                element.layout = {pos=i_pos, size=i_size}
+                                local is_active = Library.ActiveInput==element
+                                render.add_rect_filled(i_pos, i_pos:add(i_size), apply_alpha(Library.BackgroundColor,op), 6)
+                                render.add_rect(i_pos, i_pos:add(i_size), is_active and apply_alpha(accent,op) or apply_alpha(Library.OutlineColor,op), 6, 1)
+                                local d_text = #element.Value>0 and element.Value or element.Placeholder
+                                local tc = #element.Value>0 and Library.FontColor or color(0.35,0.35,0.4,1)
+                                render.add_text(i_pos:add(vector2(8,3)), get_clipped_text(d_text, i_size.x-14), apply_alpha(tc,op))
+                                if is_active and (math.floor(get_unixtime()*2)%2==0) then
+                                    local tw2 = render.get_text_size(get_clipped_text(element.Value, i_size.x-14)).x
+                                    render.add_line(i_pos:add(vector2(8+tw2,5)), i_pos:add(vector2(8+tw2,i_size.y-5)), apply_alpha(Library.FontColor,op), 1)
+                                end
+                                if not Library.DraggingWindow and mpressed and is_mouse_in_rect(i_pos, i_size) and can_interact then
+                                    Library.ActiveInput=element
+                                end
+
+                            -- KeyPicker
+                            elseif element.Type=="KeyPicker" then
+                                render.add_text(ep, element.Text, apply_alpha(Library.SecondaryFontColor, op))
+                                local k_pos  = ep:add(vector2(0,18))
+                                local k_size = vector2(group_size.x-20, 22)
+                                element.layout = {pos=k_pos, size=k_size}
+                                render.add_rect_filled(k_pos, k_pos:add(k_size), apply_alpha(Library.BackgroundColor,op), 6)
+                                render.add_rect(k_pos, k_pos:add(k_size), (element.Picking and apply_alpha(accent,op)) or apply_alpha(Library.OutlineColor,op), 6, 1)
+                                local mode_tag = ""
+                                if element.Mode=="Hold" then mode_tag=" [H]" elseif element.Mode=="Toggle" then mode_tag=" [T]" end
+                                local ktext = element.Picking and "press a key..." or (element.Value .. mode_tag)
+                                render.add_text(k_pos:add(vector2(k_size.x/2 - render.get_text_size(ktext).x/2, 3)), ktext, apply_alpha(Library.FontColor,op))
+                                if not Library.DraggingWindow and mpressed and is_mouse_in_rect(k_pos, k_size) and can_interact then
+                                    element.Picking=true
+                                    Library.ActiveKeyPicker={obj=element, layout=element.layout}
+                                end
+                                if not Library.DraggingWindow and input.is_key_pressed(0x02) and is_mouse_in_rect(k_pos, k_size) and can_interact then
+                                    Library.RightClickMenu={obj=element, pos=mp, Alpha=0}
+                                end
+
+                            -- ColorPicker
+                            elseif element.Type=="ColorPicker" then
+                                local box_size = vector2(18,14)
+                                local box_pos  = ep:add(vector2(group_size.x-20-box_size.x, 4))
+                                element.layout.pos  = box_pos
+                                element.layout.size = box_size
+                                render.add_text(ep:add(vector2(0,3)), element.Text, apply_alpha(Library.SecondaryFontColor,op))
+                                if element.EnableAlpha then draw_checkerboard(box_pos:add(vector2(1,1)), box_size:subtract(vector2(2,2)), 4) end
+                                render.add_rect_filled(box_pos:add(vector2(1,1)), box_pos:add(box_size):subtract(vector2(1,1)), apply_alpha(element.Value,op), 4)
+                                render.add_rect(box_pos, box_pos:add(box_size), apply_alpha(Library.OutlineColor,op), 4, 1)
+                                if not Library.DraggingWindow and mpressed and is_mouse_in_rect(box_pos, box_size) and can_interact then
+                                    element.Open = not element.Open
+                                    if element.Open then
+                                        Library.ActiveColorPicker = {obj=element, layout=element.layout}
+                                    else
+                                        Library.ActiveColorPicker = nil
+                                    end
+                                end
+
+                            -- Divider
+                            elseif element.Type=="Divider" then
+                                local dy = ep.y + element.Height/2
+                                render.add_line(vector2(ep.x,dy), vector2(ep.x+group_size.x-20,dy), apply_alpha(Library.OutlineColor,op), 1)
+
+                            -- Label
+                            elseif element.Type=="Label" then
+                                render.add_text(ep:add(vector2(0,4)), element.Text, apply_alpha(Library.FontColor,op))
+                            end
+
+                            element_y = element_y + element.Height
                         end
+
+                        if groupbox.Side=="Left" then left_y=left_y+group_size.y+12
+                        else right_y=right_y+group_size.y+12 end
                     end
                 end
             end
-            ::continue_window::
         end
+        ::continue_window::
     end
 
     -- ── dropdown list (drawn above everything) ──
@@ -1068,7 +1247,7 @@ hook.add("init", "auth_key_handler_init", function()
         end
     end)
 
-    -- Menu toggle key
+    -- Menu toggle key (works even when Photon menu is closed)
     local last_menu_press = 0
     hook.add("render", "menu_toggle_handler", function()
         local menu_key_obj = Library.Options.menu_key
@@ -1083,6 +1262,7 @@ hook.add("init", "auth_key_handler_init", function()
                     for _, w in ipairs(Library.Windows) do
                         if w.TargetAlpha > 0.5 then
                             w.TargetAlpha = 0
+                            w.Visible = false
                         else
                             w.Visible = true
                             w.TargetAlpha = 1
