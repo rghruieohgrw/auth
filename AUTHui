@@ -1,22 +1,16 @@
--- Complete Working Photon UI Library
--- Save this entire file as AUTHui on your GitHub
-
-local _players = game:get_service("Players")
-local _localname = _players and _players.local_player and _players.local_player.name or "unknown"
+-- Simple Photon UI Library with Working Config System
 
 local Library = {
     Windows = {},
     Toggles = {},
     Options = {},
-    FontColor = color():int(220, 220, 220, 255),
-    MainColor = color():int(30, 30, 35, 255),
-    BackgroundColor = color():int(20, 20, 25, 255),
-    AccentColor = color():int(100, 150, 255, 255),
-    RiskColor = color(1, 0.3, 0.3, 1),
+    FontColor = color(0.9, 0.9, 0.95, 1),
+    MainColor = color(0.12, 0.12, 0.15, 1),
+    BackgroundColor = color(0.08, 0.08, 0.1, 1),
+    AccentColor = color(0.4, 0.5, 0.9, 1),
     Notifications = {},
     Watermark = { Text = "Menu", Pos = vector2(15, 15), Visible = true },
     ConfigFolder = "photon_configs/",
-    ConfigDropdown = nil,
     CurrentConfig = "",
     
     -- Config System
@@ -38,42 +32,46 @@ local Library = {
         return configs
     end,
     
-    UpdateManifest = function(self, name)
-        local configs = self:GetConfigList()
-        local found = false
-        for _, n in ipairs(configs) do
-            if n == name then found = true; break end
-        end
-        if not found then table.insert(configs, name) end
-        table.sort(configs)
-        local manifest = { configs = configs, last_updated = get_unixtime() }
-        if not file.exists(self.ConfigFolder) then file.write(self.ConfigFolder .. ".keep", "") end
-        file.write(self.ConfigFolder .. "manifest.json", self:TableToJSON(manifest))
-        return configs
-    end,
-    
     SaveConfig = function(self, name)
-        if not file.exists(self.ConfigFolder) then file.write(self.ConfigFolder .. ".keep", "") end
+        if not file.exists(self.ConfigFolder) then
+            file.write(self.ConfigFolder .. ".keep", "")
+        end
+        
         local config = { toggles = {}, options = {}, saved_at = get_unixtime() }
-        for id, toggle in pairs(self.Toggles) do config.toggles[id] = toggle.Value end
+        
+        for id, toggle in pairs(self.Toggles) do
+            config.toggles[id] = toggle.Value
+        end
+        
         for id, opt in pairs(self.Options) do
             if opt.Type == "Slider" then
                 config.options[id] = { type = "Slider", value = opt.Value }
             elseif opt.Type == "Dropdown" then
-                config.options[id] = { type = "Dropdown", value = opt.Value, multi = opt.Multi or false }
+                config.options[id] = { type = "Dropdown", value = opt.Value }
             elseif opt.Type == "Input" then
                 config.options[id] = { type = "Input", value = opt.Value }
             elseif opt.Type == "KeyPicker" then
-                config.options[id] = { type = "KeyPicker", value = opt.Value, mode = opt.Mode or "Hold" }
+                config.options[id] = { type = "KeyPicker", value = opt.Value, mode = opt.Mode }
             elseif opt.Type == "ColorPicker" then
                 local c = opt.Value
                 config.options[id] = { type = "ColorPicker", value = { r = c.r, g = c.g, b = c.b, a = c.a } }
             end
         end
-        file.write(self.ConfigFolder .. name .. ".json", self:TableToJSON(config))
-        self:UpdateManifest(name)
+        
+        local json_str = self:TableToJSON(config)
+        file.write(self.ConfigFolder .. name .. ".json", json_str)
+        
+        -- Update manifest
+        local configs = self:GetConfigList()
+        local found = false
+        for _, n in ipairs(configs) do if n == name then found = true; break end end
+        if not found then table.insert(configs, name) end
+        table.sort(configs)
+        file.write(self.ConfigFolder .. "manifest.json", self:TableToJSON({ configs = configs }))
+        
         self.CurrentConfig = name
-        self:Notify("Saved: " .. name, 3)
+        self:Notify("Saved: " .. name)
+        
         if self.ConfigDropdown then
             self.ConfigDropdown:SetValues(self:GetConfigList())
             self.ConfigDropdown:SetValue(name)
@@ -84,11 +82,14 @@ local Library = {
     LoadConfig = function(self, name)
         local filename = self.ConfigFolder .. name .. ".json"
         if not file.exists(filename) then return false end
+        
         local config = self:JSONToTable(file.read(filename))
         if not config then return false end
+        
         for id, value in pairs(config.toggles or {}) do
             if self.Toggles[id] then self.Toggles[id]:SetValue(value) end
         end
+        
         for id, data in pairs(config.options or {}) do
             if self.Options[id] then
                 if data.type == "Slider" then
@@ -105,29 +106,25 @@ local Library = {
                 end
             end
         end
+        
         self.CurrentConfig = name
-        self:Notify("Loaded: " .. name, 3)
+        self:Notify("Loaded: " .. name)
         if self.ConfigDropdown then self.ConfigDropdown:SetValue(name) end
         return true
     end,
     
     DeleteConfig = function(self, name)
-        local filename = self.ConfigFolder .. name .. ".json"
-        if file.exists(filename) then
-            file.write(filename, "")
-            local configs = self:GetConfigList()
-            local new_configs = {}
-            for _, n in ipairs(configs) do if n ~= name then table.insert(new_configs, n) end end
-            local manifest = { configs = new_configs, last_updated = get_unixtime() }
-            file.write(self.ConfigFolder .. "manifest.json", self:TableToJSON(manifest))
-            self:Notify("Deleted: " .. name, 3)
-            if self.ConfigDropdown then
-                self.ConfigDropdown:SetValues(new_configs)
-                self.ConfigDropdown:SetValue("")
-            end
-            return true
+        file.write(self.ConfigFolder .. name .. ".json", "")
+        local configs = self:GetConfigList()
+        local new_configs = {}
+        for _, n in ipairs(configs) do if n ~= name then table.insert(new_configs, n) end end
+        file.write(self.ConfigFolder .. "manifest.json", self:TableToJSON({ configs = new_configs }))
+        self:Notify("Deleted: " .. name)
+        if self.ConfigDropdown then
+            self.ConfigDropdown:SetValues(new_configs)
+            self.ConfigDropdown:SetValue("")
         end
-        return false
+        return true
     end,
     
     ResetAll = function(self)
@@ -135,7 +132,7 @@ local Library = {
         for id, opt in pairs(self.Options) do
             if opt.Type == "Slider" then
                 opt:SetValue((opt.Min + opt.Max) / 2)
-            elseif opt.Type == "Dropdown" and not opt.Multi and #opt.Values > 0 then
+            elseif opt.Type == "Dropdown" and #opt.Values > 0 then
                 opt:SetValue(opt.Values[1])
             elseif opt.Type == "Input" then
                 opt:SetValue("")
@@ -145,9 +142,10 @@ local Library = {
                 opt:SetValue(color(1, 1, 1, 1))
             end
         end
-        self:Notify("Reset all settings!", 3)
+        self:Notify("Reset all settings")
     end,
     
+    -- JSON Helpers
     TableToJSON = function(self, tbl)
         local function serialize(val)
             if type(val) == "string" then return '"' .. val:gsub('"', '\\"') .. '"'
@@ -177,363 +175,348 @@ local Library = {
     
     Notify = function(self, text, duration)
         table.insert(self.Notifications, {
-            Text = text, Duration = duration or 4, StartTime = get_unixtime(),
-            Alpha = 0, TargetAlpha = 1, OffsetX = 30
+            Text = text, Duration = duration or 3, StartTime = get_unixtime(), Alpha = 1
         })
     end,
     
     SetWatermark = function(self, text)
         self.Watermark.Text = text
-        self.Watermark.Visible = true
     end,
-}
-
--- Window creation
-function Library:CreateWindow(config)
-    local window = {
-        Title = config.Title or "Window",
-        Pos = config.Center and vector2(get_screen_size().x/2 - (config.Size.x/2), get_screen_size().y/2 - (config.Size.y/2)) or vector2(100, 100),
-        Size = config.Size or vector2(600, 500),
-        Visible = config.AutoShow or false,
-        Alpha = config.AutoShow and 1 or 0,
-        TargetAlpha = config.AutoShow and 1 or 0,
-        Tabs = {},
-        ActiveTab = nil,
-    }
     
-    function window:AddTab(name)
-        local tab = { Name = name, Parent = window, Elements = {} }
+    -- Window Creation
+    CreateWindow = function(self, config)
+        local window = {
+            Title = config.Title or "Window",
+            Pos = config.Center and vector2(get_screen_size().x/2 - config.Size.x/2, get_screen_size().y/2 - config.Size.y/2) or vector2(100, 100),
+            Size = config.Size or vector2(500, 400),
+            Visible = config.AutoShow or false,
+            Tabs = {},
+            ActiveTab = nil,
+        }
         
-        function tab:AddLeftGroupbox(name, opts)
-            return self:AddGroupbox(name, "Left")
-        end
-        
-        function tab:AddRightGroupbox(name, opts)
-            return self:AddGroupbox(name, "Right")
-        end
-        
-        function tab:AddGroupbox(name, side)
-            local groupbox = { Name = name, Side = side or "Left", Parent = tab, Elements = {} }
+        function window:AddTab(name)
+            local tab = { Name = name, Parent = window, Groups = {} }
             
-            function groupbox:AddToggle(id, info)
-                local el = {
-                    Type = "Toggle", Id = id, Text = info.Text, Value = info.Default or false,
-                    Tooltip = info.Tooltip, Risky = info.Risky or false, Height = 28
-                }
-                function el:SetValue(val) self.Value = val end
-                function el:OnChanged(func) self.OnChangedFunc = func; return self end
+            function tab:AddLeftGroupbox(name)
+                local group = { Name = name, Side = "left", Parent = tab, Elements = {} }
+                table.insert(self.Groups, group)
+                return group
+            end
+            
+            function tab:AddRightGroupbox(name)
+                local group = { Name = name, Side = "right", Parent = tab, Elements = {} }
+                table.insert(self.Groups, group)
+                return group
+            end
+            
+            function group:AddToggle(id, info)
+                local el = { Type = "Toggle", Id = id, Text = info.Text, Value = info.Default or false, Tooltip = info.Tooltip, Height = 28 }
+                function el:SetValue(v) self.Value = v; if self.OnChange then self.OnChange(v) end end
+                function el:OnChanged(f) self.OnChange = f; return self end
                 table.insert(self.Elements, el)
                 Library.Toggles[id] = el
                 return el
             end
             
-            function groupbox:AddSlider(id, info)
-                local el = {
-                    Type = "Slider", Id = id, Text = info.Text, Value = info.Default or 0,
-                    Min = info.Min or 0, Max = info.Max or 100, Suffix = info.Suffix or "",
-                    Rounding = info.Rounding or 0, Tooltip = info.Tooltip, Height = 50
-                }
-                function el:SetValue(val) 
-                    self.Value = math.clamp(val, self.Min, self.Max)
-                end
-                function el:OnChanged(func) self.OnChangedFunc = func; return self end
+            function group:AddSlider(id, info)
+                local el = { Type = "Slider", Id = id, Text = info.Text, Value = info.Default or 0, Min = info.Min or 0, Max = info.Max or 100, Suffix = info.Suffix or "", Height = 50 }
+                function el:SetValue(v) self.Value = math.clamp(v, self.Min, self.Max); if self.OnChange then self.OnChange(self.Value) end end
+                function el:OnChanged(f) self.OnChange = f; return self end
                 table.insert(self.Elements, el)
                 Library.Options[id] = el
                 return el
             end
             
-            function groupbox:AddDropdown(id, info)
-                local el = {
-                    Type = "Dropdown", Id = id, Text = info.Text, Value = info.Default and info.Values[info.Default] or info.Values[1],
-                    Values = info.Values, Multi = info.Multi or false, Tooltip = info.Tooltip, Height = 44
-                }
-                function el:SetValue(val) self.Value = val end
-                function el:SetValues(vals) self.Values = vals; if #vals > 0 then self:SetValue(vals[1]) end end
-                function el:OnChanged(func) self.OnChangedFunc = func; return self end
-                if info.Multi then el.Value = info.Default or {} end
+            function group:AddDropdown(id, info)
+                local el = { Type = "Dropdown", Id = id, Text = info.Text, Value = info.Values[1], Values = info.Values, Height = 44 }
+                function el:SetValue(v) self.Value = v; if self.OnChange then self.OnChange(v) end end
+                function el:SetValues(v) self.Values = v; if #v > 0 then self:SetValue(v[1]) end end
+                function el:OnChanged(f) self.OnChange = f; return self end
                 table.insert(self.Elements, el)
                 Library.Options[id] = el
                 return el
             end
             
-            function groupbox:AddInput(id, info)
-                local el = {
-                    Type = "Input", Id = id, Text = info.Text, Value = info.Default or "",
-                    Placeholder = info.Placeholder or "", Tooltip = info.Tooltip, Height = 44
-                }
-                function el:SetValue(val) self.Value = val end
-                function el:OnChanged(func) self.OnChangedFunc = func; return self end
+            function group:AddInput(id, info)
+                local el = { Type = "Input", Id = id, Text = info.Text, Value = info.Default or "", Placeholder = info.Placeholder or "", Height = 44 }
+                function el:SetValue(v) self.Value = v; if self.OnChange then self.OnChange(v) end end
+                function el:OnChanged(f) self.OnChange = f; return self end
                 table.insert(self.Elements, el)
                 Library.Options[id] = el
                 return el
             end
             
-            function groupbox:AddKeyPicker(id, info)
-                local el = {
-                    Type = "KeyPicker", Id = id, Text = info.Text, Value = info.Default or "...",
-                    Mode = info.Mode or "Hold", Tooltip = info.Tooltip, Height = 44, Active = false
-                }
-                function el:SetValue(val) self.Value = val end
+            function group:AddKeyPicker(id, info)
+                local el = { Type = "KeyPicker", Id = id, Text = info.Text, Value = info.Default or "None", Mode = info.Mode or "Hold", Height = 44, Active = false }
+                function el:SetValue(v) self.Value = v end
                 function el:IsActive() return self.Active end
-                function el:OnChanged(func) self.OnChangedFunc = func; return self end
                 table.insert(self.Elements, el)
                 Library.Options[id] = el
                 return el
             end
             
-            function groupbox:AddColorPicker(id, info)
-                local el = {
-                    Type = "ColorPicker", Id = id, Text = info.Text, Value = info.Default or color(1,1,1,1),
-                    EnableAlpha = info.EnableAlpha or false, Tooltip = info.Tooltip, Height = 24
-                }
-                function el:SetValue(val) self.Value = val end
-                function el:OnChanged(func) self.OnChangedFunc = func; return self end
+            function group:AddColorPicker(id, info)
+                local el = { Type = "ColorPicker", Id = id, Text = info.Text, Value = info.Default or color(1,1,1,1), Height = 24 }
+                function el:SetValue(v) self.Value = v end
                 table.insert(self.Elements, el)
                 Library.Options[id] = el
                 return el
             end
             
-            function groupbox:AddButton(info)
-                local el = { Type = "Button", Text = info.Text, Func = info.Func, DoubleClick = info.DoubleClick or false, Tooltip = info.Tooltip, Height = 30, LastClick = 0 }
+            function group:AddButton(info)
+                local el = { Type = "Button", Text = info.Text, Func = info.Func, Height = 30, DoubleClick = info.DoubleClick or false }
                 table.insert(self.Elements, el)
                 return el
             end
             
-            function groupbox:AddDivider(height)
-                table.insert(self.Elements, { Type = "Divider", Height = height or 14 })
-                return groupbox
+            function group:AddDivider()
+                table.insert(self.Elements, { Type = "Divider", Height = 14 })
+                return group
             end
             
-            function groupbox:AddLabel(text)
+            function group:AddLabel(text)
                 table.insert(self.Elements, { Type = "Label", Text = text, Height = 22 })
-                return groupbox
+                return group
             end
             
-            table.insert(self.Elements, groupbox)
-            return groupbox
+            table.insert(window.Tabs, tab)
+            if not window.ActiveTab then window.ActiveTab = tab end
+            return tab
         end
         
-        table.insert(window.Tabs, tab)
-        if not window.ActiveTab then window.ActiveTab = tab end
-        return tab
-    end
+        table.insert(self.Windows, window)
+        return window
+    end,
     
-    table.insert(Library.Windows, window)
-    return window
-end
-
--- Config section creator
-function Library:CreateConfigSection(groupbox)
-    local configs = self:GetConfigList()
-    
-    local dropdown = groupbox:AddDropdown("config_dropdown", {
-        Text = "Load Config",
-        Default = 1,
-        Values = configs,
-        Tooltip = "Select a config to load"
-    })
-    
-    self.ConfigDropdown = dropdown
-    
-    local name_input = groupbox:AddInput("config_name", {
-        Text = "Config Name",
-        Default = "",
-        Placeholder = "Enter config name...",
-        Tooltip = "Name for your config"
-    })
-    
-    groupbox:AddDivider()
-    
-    groupbox:AddButton({
-        Text = "Save Config",
-        Func = function()
-            local name = name_input.Value
-            if name and name ~= "" then
-                self:SaveConfig(name)
-                name_input:SetValue("")
-            else
-                self:Notify("Enter a config name!", 3)
+    -- Config Section Creator (WITH WORKING TEXTBOX)
+    CreateConfigSection = function(self, groupbox)
+        local configs = self:GetConfigList()
+        
+        -- Config dropdown
+        local dropdown = groupbox:AddDropdown("config_dropdown", {
+            Text = "Load Config",
+            Values = configs,
+            Tooltip = "Select a config to load"
+        })
+        self.ConfigDropdown = dropdown
+        
+        -- TEXTBOX for config name
+        local name_input = groupbox:AddInput("config_name", {
+            Text = "Config Name",
+            Default = "",
+            Placeholder = "Enter config name here...",
+            Tooltip = "Type the name for your config"
+        })
+        
+        groupbox:AddDivider()
+        
+        -- Save button (uses textbox value)
+        groupbox:AddButton({
+            Text = "Save Config",
+            Func = function()
+                local name = name_input.Value
+                if name and name ~= "" then
+                    self:SaveConfig(name)
+                    name_input:SetValue("")
+                else
+                    self:Notify("Enter a config name first!")
+                end
             end
-        end,
-        Tooltip = "Save with the name above"
-    })
-    
-    groupbox:AddButton({
-        Text = "Overwrite Selected",
-        Func = function()
-            local name = dropdown.Value
-            if name and name ~= "" then
-                self:SaveConfig(name)
-                self:Notify("Overwrote: " .. name, 3)
-            else
-                self:Notify("No config selected", 3)
+        })
+        
+        -- Overwrite button
+        groupbox:AddButton({
+            Text = "Overwrite Selected",
+            Func = function()
+                local name = dropdown.Value
+                if name and name ~= "" then
+                    self:SaveConfig(name)
+                    self:Notify("Overwrote: " .. name)
+                else
+                    self:Notify("No config selected")
+                end
             end
-        end,
-        Tooltip = "Save over selected config"
-    })
-    
-    groupbox:AddDivider()
-    
-    groupbox:AddButton({
-        Text = "Delete Selected",
-        DoubleClick = true,
-        Func = function()
-            local name = dropdown.Value
-            if name and name ~= "" then
-                self:DeleteConfig(name)
+        })
+        
+        groupbox:AddDivider()
+        
+        -- Delete button
+        groupbox:AddButton({
+            Text = "Delete Selected",
+            DoubleClick = true,
+            Func = function()
+                local name = dropdown.Value
+                if name and name ~= "" then
+                    self:DeleteConfig(name)
+                    name_input:SetValue("")
+                else
+                    self:Notify("No config selected")
+                end
+            end
+        })
+        
+        -- Reset button
+        groupbox:AddButton({
+            Text = "Reset All",
+            DoubleClick = true,
+            Func = function()
+                self:ResetAll()
+            end
+        })
+        
+        -- Refresh button
+        groupbox:AddButton({
+            Text = "Refresh List",
+            Func = function()
                 local updated = self:GetConfigList()
                 dropdown:SetValues(updated)
-                name_input:SetValue("")
-            else
-                self:Notify("No config selected", 3)
+                self:Notify("Config list refreshed")
             end
-        end,
-        Tooltip = "Double click to delete"
-    })
-    
-    groupbox:AddButton({
-        Text = "Reset All",
-        DoubleClick = true,
-        Func = function()
-            self:ResetAll()
-        end,
-        Tooltip = "Double click to reset"
-    })
-    
-    groupbox:AddButton({
-        Text = "Refresh List",
-        Func = function()
-            local updated = self:GetConfigList()
-            dropdown:SetValues(updated)
-            self:Notify("Refreshed", 2)
-        end,
-        Tooltip = "Refresh config list"
-    })
-    
-    dropdown:OnChanged(function(value)
-        if value and value ~= "" then
-            self:LoadConfig(value)
-            name_input:SetValue(value)
-        end
-    end)
-    
-    return dropdown
-end
+        })
+        
+        dropdown:OnChanged(function(value)
+            if value and value ~= "" then
+                self:LoadConfig(value)
+                name_input:SetValue(value)
+            end
+        end)
+        
+        return dropdown
+    end
+}
 
--- Render hook
+-- Render Hook
 hook.add("render", "library_render", function()
     -- Draw watermark
     if Library.Watermark.Visible then
         local ts = render.get_text_size(Library.Watermark.Text)
         local wsz = vector2(ts.x + 16, 24)
-        local pos = Library.Watermark.Pos
-        render.add_rect_filled(pos, pos:add(wsz), Library.MainColor, 6)
-        render.add_text(pos:add(vector2(8, 4)), Library.Watermark.Text, Library.FontColor)
+        render.add_rect_filled(Library.Watermark.Pos, Library.Watermark.Pos:add(wsz), Library.MainColor, 6)
+        render.add_text(Library.Watermark.Pos:add(vector2(8, 4)), Library.Watermark.Text, Library.FontColor)
     end
     
     -- Draw windows
     for _, window in ipairs(Library.Windows) do
         if window.Visible then
-            window.Alpha = window.Alpha + (window.TargetAlpha - window.Alpha) * 0.1
+            local pos = window.Pos
+            local size = window.Size
             
-            if window.Alpha > 0.01 then
-                local a = window.Alpha
-                local pos = window.Pos
-                local size = window.Size
+            -- Window background
+            render.add_rect_filled(pos, pos:add(size), Library.BackgroundColor, 10)
+            render.add_text(pos:add(vector2(12, 8)), window.Title, Library.FontColor)
+            
+            -- Tabs
+            local tab_y = pos.y + 35
+            local tab_x = pos.x + 10
+            
+            for _, tab in ipairs(window.Tabs) do
+                local tw = render.get_text_size(tab.Name).x + 20
+                local is_active = (window.ActiveTab == tab)
+                local bg = is_active and Library.AccentColor or color(0.15, 0.15, 0.2, 1)
+                render.add_rect_filled(vector2(tab_x, tab_y), vector2(tab_x + tw, tab_y + 26), bg, 6)
+                render.add_text(vector2(tab_x + 10, tab_y + 6), tab.Name, Library.FontColor)
                 
-                render.add_rect_filled(pos, pos:add(size), color(Library.BackgroundColor.r, Library.BackgroundColor.g, Library.BackgroundColor.b, a), 10)
-                render.add_text(pos:add(vector2(12, 8)), window.Title, color(Library.FontColor.r, Library.FontColor.g, Library.FontColor.b, a))
-                
-                local tab_y = pos.y + 35
-                local tab_x = pos.x + 10
-                local content_x = pos.x + 10
-                local content_y = tab_y + 30
-                
-                -- Draw tabs
-                for _, tab in ipairs(window.Tabs) do
-                    local tw = render.get_text_size(tab.Name).x + 20
-                    local is_active = (window.ActiveTab == tab)
-                    local bg = is_active and Library.AccentColor or color(0.15, 0.15, 0.2, 1)
-                    render.add_rect_filled(vector2(tab_x, tab_y), vector2(tab_x + tw, tab_y + 26), color(bg.r, bg.g, bg.b, a), 6)
-                    render.add_text(vector2(tab_x + 10, tab_y + 6), tab.Name, color(Library.FontColor.r, Library.FontColor.g, Library.FontColor.b, a))
-                    tab_x = tab_x + tw + 5
+                if not is_active and is_mouse_in_rect(vector2(tab_x, tab_y), vector2(tw, 26)) and input.is_key_pressed(0x01) then
+                    window.ActiveTab = tab
                 end
+                tab_x = tab_x + tw + 5
+            end
+            
+            -- Content area
+            local content_y = tab_y + 35
+            local content_height = size.y - content_y + pos.y - 10
+            
+            -- Draw active tab content
+            if window.ActiveTab then
+                local left_x = pos.x + 15
+                local right_x = pos.x + size.x / 2 + 5
+                local y_offset = content_y + 5
                 
-                -- Draw content area
-                local content_size = vector2(size.x - 20, size.y - 65)
-                render.add_rect_filled(vector2(content_x, content_y), vector2(content_x + content_size.x, content_y + content_size.y), color(Library.MainColor.r, Library.MainColor.g, Library.MainColor.b, a), 8)
-                
-                -- Draw active tab content
-                if window.ActiveTab then
-                    local left_x = content_x + 10
-                    local right_x = content_x + content_size.x / 2 + 5
-                    local y_offset = 10
+                for _, group in ipairs(window.ActiveTab.Groups) do
+                    local gx = (group.Side == "left") and left_x or right_x
+                    local gw = size.x / 2 - 25
                     
-                    for _, groupbox in ipairs(window.ActiveTab.Elements) do
-                        local gb_x = (groupbox.Side == "Left") and left_x or right_x
-                        local gb_y = content_y + y_offset
-                        
-                        -- Draw groupbox
-                        local gb_height = 40
-                        for _, el in ipairs(groupbox.Elements) do
-                            gb_height = gb_height + el.Height
-                        end
-                        
-                        render.add_rect_filled(vector2(gb_x, gb_y), vector2(gb_x + (content_size.x / 2 - 15), gb_y + gb_height), color(0.1, 0.1, 0.13, a), 6)
-                        render.add_text(vector2(gb_x + 10, gb_y + 8), groupbox.Name, color(Library.FontColor.r, Library.FontColor.g, Library.FontColor.b, a))
-                        
-                        local el_y = gb_y + 35
-                        for _, element in ipairs(groupbox.Elements) do
-                            if element.Type == "Toggle" then
-                                render.add_text(vector2(gb_x + 10, el_y + 5), element.Text, color(Library.FontColor.r, Library.FontColor.g, Library.FontColor.b, a))
-                                local sw_pos = vector2(gb_x + 150, el_y + 3)
-                                render.add_rect_filled(sw_pos, sw_pos:add(vector2(30, 17)), color(element.Value and Library.AccentColor.r or 0.2, element.Value and Library.AccentColor.g or 0.2, element.Value and Library.AccentColor.b or 0.2, a), 8)
-                                render.add_rect_filled(vector2(sw_pos.x + (element.Value and 15 or 2), sw_pos.y + 2), vector2(sw_pos.x + (element.Value and 28 or 13), sw_pos.y + 15), color(1, 1, 1, a), 6)
-                                
-                            elseif element.Type == "Slider" then
-                                local ratio = (element.Value - element.Min) / (element.Max - element.Min)
-                                render.add_text(vector2(gb_x + 10, el_y + 5), element.Text, color(Library.FontColor.r, Library.FontColor.g, Library.FontColor.b, a))
-                                render.add_text(vector2(gb_x + 170, el_y + 5), tostring(element.Value) .. element.Suffix, color(Library.FontColor.r, Library.FontColor.g, Library.FontColor.b, a))
-                                render.add_rect_filled(vector2(gb_x + 10, el_y + 25), vector2(gb_x + 180, el_y + 35), color(0.2, 0.2, 0.25, a), 4)
-                                render.add_rect_filled(vector2(gb_x + 10, el_y + 25), vector2(gb_x + 10 + (170 * ratio), el_y + 35), color(Library.AccentColor.r, Library.AccentColor.g, Library.AccentColor.b, a), 4)
-                                
-                            elseif element.Type == "Button" then
-                                render.add_rect_filled(vector2(gb_x + 10, el_y), vector2(gb_x + 180, el_y + 24), color(0.2, 0.2, 0.25, a), 6)
-                                render.add_text(vector2(gb_x + 100 - render.get_text_size(element.Text).x / 2, el_y + 6), element.Text, color(Library.FontColor.r, Library.FontColor.g, Library.FontColor.b, a))
-                                
-                            elseif element.Type == "Dropdown" then
-                                render.add_text(vector2(gb_x + 10, el_y + 5), element.Text, color(Library.FontColor.r, Library.FontColor.g, Library.FontColor.b, a))
-                                local display = type(element.Value) == "table" and "Multiple" or tostring(element.Value)
-                                render.add_rect_filled(vector2(gb_x + 10, el_y + 22), vector2(gb_x + 180, el_y + 40), color(0.2, 0.2, 0.25, a), 4)
-                                render.add_text(vector2(gb_x + 15, el_y + 28), display, color(Library.FontColor.r, Library.FontColor.g, Library.FontColor.b, a))
-                                
-                            elseif element.Type == "Input" then
-                                render.add_text(vector2(gb_x + 10, el_y + 5), element.Text, color(Library.FontColor.r, Library.FontColor.g, Library.FontColor.b, a))
-                                render.add_rect_filled(vector2(gb_x + 10, el_y + 22), vector2(gb_x + 180, el_y + 40), color(0.2, 0.2, 0.25, a), 4)
-                                local display = (element.Value ~= "") and element.Value or element.Placeholder
-                                render.add_text(vector2(gb_x + 15, el_y + 28), display, color(0.5, 0.5, 0.5, a))
-                                
-                            elseif element.Type == "KeyPicker" then
-                                render.add_text(vector2(gb_x + 10, el_y + 5), element.Text, color(Library.FontColor.r, Library.FontColor.g, Library.FontColor.b, a))
-                                render.add_rect_filled(vector2(gb_x + 10, el_y + 22), vector2(gb_x + 180, el_y + 40), color(0.2, 0.2, 0.25, a), 4)
-                                render.add_text(vector2(gb_x + 95 - render.get_text_size(element.Value).x / 2, el_y + 28), element.Value, color(Library.FontColor.r, Library.FontColor.g, Library.FontColor.b, a))
-                                
-                            elseif element.Type == "ColorPicker" then
-                                render.add_text(vector2(gb_x + 10, el_y + 5), element.Text, color(Library.FontColor.r, Library.FontColor.g, Library.FontColor.b, a))
-                                render.add_rect_filled(vector2(gb_x + 160, el_y + 3), vector2(gb_x + 180, el_y + 19), color(element.Value.r, element.Value.g, element.Value.b, a), 4)
-                                
-                            elseif element.Type == "Divider" then
-                                render.add_line(vector2(gb_x + 10, el_y + 7), vector2(gb_x + 180, el_y + 7), color(0.3, 0.3, 0.3, a), 1)
-                                
-                            elseif element.Type == "Label" then
-                                render.add_text(vector2(gb_x + 10, el_y + 5), element.Text, color(Library.FontColor.r, Library.FontColor.g, Library.FontColor.b, a))
+                    -- Calculate group height
+                    local gh = 35
+                    for _, el in ipairs(group.Elements) do
+                        gh = gh + el.Height + 5
+                    end
+                    
+                    -- Group background
+                    render.add_rect_filled(vector2(gx, y_offset), vector2(gx + gw, y_offset + gh), color(0.1, 0.1, 0.13, 1), 6)
+                    render.add_text(vector2(gx + 10, y_offset + 8), group.Name, Library.FontColor)
+                    
+                    local ey = y_offset + 35
+                    for _, element in ipairs(group.Elements) do
+                        if element.Type == "Toggle" then
+                            render.add_text(vector2(gx + 10, ey + 5), element.Text, Library.FontColor)
+                            local sw_pos = vector2(gx + gw - 40, ey + 3)
+                            render.add_rect_filled(sw_pos, sw_pos:add(vector2(30, 17)), element.Value and Library.AccentColor or color(0.2, 0.2, 0.25, 1), 8)
+                            render.add_rect_filled(vector2(sw_pos.x + (element.Value and 15 or 2), sw_pos.y + 2), vector2(sw_pos.x + (element.Value and 28 or 13), sw_pos.y + 15), color(1,1,1,1), 6)
+                            
+                            if is_mouse_in_rect(vector2(gx + 10, ey), vector2(gw - 20, 25)) and input.is_key_pressed(0x01) then
+                                element:SetValue(not element.Value)
                             end
                             
-                            el_y = el_y + element.Height
+                        elseif element.Type == "Slider" then
+                            local ratio = (element.Value - element.Min) / (element.Max - element.Min)
+                            render.add_text(vector2(gx + 10, ey + 5), element.Text, Library.FontColor)
+                            render.add_text(vector2(gx + gw - 50, ey + 5), tostring(element.Value) .. element.Suffix, Library.FontColor)
+                            render.add_rect_filled(vector2(gx + 10, ey + 25), vector2(gx + gw - 10, ey + 35), color(0.2, 0.2, 0.25, 1), 4)
+                            render.add_rect_filled(vector2(gx + 10, ey + 25), vector2(gx + 10 + ((gw - 20) * ratio), ey + 35), Library.AccentColor, 4)
+                            
+                        elseif element.Type == "Dropdown" then
+                            render.add_text(vector2(gx + 10, ey + 5), element.Text, Library.FontColor)
+                            render.add_rect_filled(vector2(gx + 10, ey + 22), vector2(gx + gw - 10, ey + 40), color(0.2, 0.2, 0.25, 1), 4)
+                            render.add_text(vector2(gx + 15, ey + 28), tostring(element.Value), Library.FontColor)
+                            
+                        elseif element.Type == "Input" then
+                            render.add_text(vector2(gx + 10, ey + 5), element.Text, Library.FontColor)
+                            render.add_rect_filled(vector2(gx + 10, ey + 22), vector2(gx + gw - 10, ey + 40), color(0.2, 0.2, 0.25, 1), 4)
+                            local display = (element.Value ~= "") and element.Value or element.Placeholder
+                            render.add_text(vector2(gx + 15, ey + 28), display, color(0.6, 0.6, 0.7, 1))
+                            
+                            if is_mouse_in_rect(vector2(gx + 10, ey + 22), vector2(gw - 20, 18)) and input.is_key_pressed(0x01) then
+                                Library.ActiveInput = element
+                            end
+                            
+                        elseif element.Type == "KeyPicker" then
+                            render.add_text(vector2(gx + 10, ey + 5), element.Text, Library.FontColor)
+                            render.add_rect_filled(vector2(gx + 10, ey + 22), vector2(gx + gw - 10, ey + 40), color(0.2, 0.2, 0.25, 1), 4)
+                            render.add_text(vector2(gx + (gw/2) - render.get_text_size(element.Value).x/2, ey + 28), element.Value, Library.FontColor)
+                            
+                        elseif element.Type == "ColorPicker" then
+                            render.add_text(vector2(gx + 10, ey + 5), element.Text, Library.FontColor)
+                            render.add_rect_filled(vector2(gx + gw - 30, ey + 3), vector2(gx + gw - 10, ey + 19), element.Value, 4)
+                            
+                        elseif element.Type == "Button" then
+                            render.add_rect_filled(vector2(gx + 10, ey), vector2(gx + gw - 10, ey + 24), color(0.2, 0.2, 0.25, 1), 6)
+                            render.add_text(vector2(gx + (gw/2) - render.get_text_size(element.Text).x/2, ey + 6), element.Text, Library.FontColor)
+                            
+                            if is_mouse_in_rect(vector2(gx + 10, ey), vector2(gw - 20, 24)) and input.is_key_pressed(0x01) then
+                                if element.DoubleClick then
+                                    if get_unixtime() - (element.LastClick or 0) < 0.5 then
+                                        if element.Func then element.Func() end
+                                        element.LastClick = 0
+                                    else
+                                        element.LastClick = get_unixtime()
+                                    end
+                                else
+                                    if element.Func then element.Func() end
+                                end
+                            end
+                            
+                        elseif element.Type == "Divider" then
+                            render.add_line(vector2(gx + 10, ey + 7), vector2(gx + gw - 10, ey + 7), color(0.2, 0.2, 0.25, 1), 1)
+                            
+                        elseif element.Type == "Label" then
+                            render.add_text(vector2(gx + 10, ey + 5), element.Text, color(0.6, 0.6, 0.7, 1))
                         end
                         
-                        y_offset = y_offset + gb_height + 10
+                        ey = ey + element.Height + 5
                     end
+                    
+                    y_offset = y_offset + gh + 10
                 end
             end
         end
@@ -542,20 +525,41 @@ hook.add("render", "library_render", function()
     -- Draw notifications
     for i = #Library.Notifications, 1, -1 do
         local n = Library.Notifications[i]
-        local t = get_unixtime() - n.StartTime
-        if t > n.Duration then
-            n.TargetAlpha = 0
-            n.OffsetX = n.OffsetX + (n.TargetOffsetX - n.OffsetX) * 0.1
-        end
-        n.Alpha = n.Alpha + (n.TargetAlpha - n.Alpha) * 0.1
-        
-        if n.TargetAlpha == 0 and n.Alpha < 0.01 then
+        if get_unixtime() - n.StartTime > n.Duration then
             table.remove(Library.Notifications, i)
         else
             local nsz = vector2(render.get_text_size(n.Text).x + 20, 26)
-            local np = vector2(get_screen_size().x - 300 + n.OffsetX, 50)
-            render.add_rect_filled(np, np:add(nsz), color(Library.MainColor.r, Library.MainColor.g, Library.MainColor.b, n.Alpha), 6)
-            render.add_text(np:add(vector2(10, 5)), n.Text, color(Library.FontColor.r, Library.FontColor.g, Library.FontColor.b, n.Alpha))
+            local np = vector2(get_screen_size().x - nsz.x - 10, 50 + (i-1) * 35)
+            render.add_rect_filled(np, np:add(nsz), Library.MainColor, 6)
+            render.add_text(np:add(vector2(10, 5)), n.Text, Library.FontColor)
+        end
+    end
+end)
+
+-- Input handling
+local KEY_NAMES = {
+    [0x01]="LMB",[0x02]="RMB",[0x08]="Backspace",[0x09]="Tab",[0x0D]="Enter",
+    [0x10]="Shift",[0x11]="Ctrl",[0x12]="Alt",[0x1B]="Esc",[0x20]="Space",
+    [0x25]="Left",[0x26]="Up",[0x27]="Right",[0x28]="Down",[0x2D]="Ins",[0x2E]="Del",
+    [0x30]="0",[0x31]="1",[0x32]="2",[0x33]="3",[0x34]="4",[0x35]="5",
+    [0x36]="6",[0x37]="7",[0x38]="8",[0x39]="9",[0x41]="A",[0x42]="B",[0x43]="C",
+    [0x44]="D",[0x45]="E",[0x46]="F",[0x47]="G",[0x48]="H",[0x49]="I",[0x4A]="J",
+    [0x4B]="K",[0x4C]="L",[0x4D]="M",[0x4E]="N",[0x4F]="O",[0x50]="P",[0x51]="Q",
+    [0x52]="R",[0x53]="S",[0x54]="T",[0x55]="U",[0x56]="V",[0x57]="W",[0x58]="X",
+    [0x59]="Y",[0x5A]="Z",[0x70]="F1",[0x71]="F2",[0x72]="F3",[0x73]="F4",
+    [0x74]="F5",[0x75]="F6",[0x76]="F7",[0x77]="F8",[0x78]="F9",[0x79]="F10",
+    [0x7A]="F11",[0x7B]="F12"
+}
+
+hook.add("render", "key_picker_handler", function()
+    if Library.ActiveKeyPicker then
+        for vk, name in pairs(KEY_NAMES) do
+            if input.is_key_pressed(vk) then
+                Library.ActiveKeyPicker:SetValue(name)
+                Library.ActiveKeyPicker.Picking = false
+                Library.ActiveKeyPicker = nil
+                break
+            end
         end
     end
 end)
