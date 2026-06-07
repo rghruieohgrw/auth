@@ -204,3 +204,5 @@ return {
         }
     }
 }
+_G.Library = Library
+return Library
