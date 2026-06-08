@@ -2,7 +2,9 @@
 -- Clean rewrite: fixed icon loading, cleaned color picker, removed duplicate draw_shadow
 
 local _players = game:get_service("Players")
-local _localname = _players and _players.local_player and _players.local_player.name or "unknown"
+local _localplayer = _players and _players.local_player
+local _localname = _localplayer and _localplayer.name or "unknown"
+local _localuserid = _localplayer and tostring(_localplayer.user_id) or "0"
 
 local Library = {
     Windows = {},
@@ -16,6 +18,7 @@ local Library = {
     OutlineColor = color(0, 0, 0, 0),
     RiskColor = color(1, 0.24, 0.24, 1),
     Black = color(0, 0, 0, 1),
+    ShadowStrength = 0.5,   -- 0.0 = off, 1.0 = max; adjustable via slider
     Notifications = {},
     Watermark = { Text = "Photon Menu (" .. _localname .. ")", Pos = vector2(15, 15), Visible = true },
     ActiveSlider = nil,
@@ -47,6 +50,8 @@ local Library = {
     ConfigFolder = "photon_configs/",
     BrushTexture = nil,
     BrushLoaded = false,
+    PfpTexture = nil,
+    PfpLoaded = false,
 }
 
 -- ========== CONFIG SYSTEM ==========
@@ -324,17 +329,51 @@ local function draw_checkerboard(pos, size, sq)
 end
 
 local function draw_shadow(pos, size, radius, alpha_mult)
-    local layers = 14
+    if Library.ShadowStrength <= 0 then return end
+    local layers = 10
+    local strength = Library.ShadowStrength * (alpha_mult or 1)
     for i = 1, layers do
-        local spread = i * 4
-        local a = (1 - i / layers) ^ 1.6 * 0.32 * (alpha_mult or 1)
+        local spread = i * 3
+        local a = (1 - i / layers) ^ 1.4 * 0.22 * strength
         local sp = pos:add(vector2(-spread, -spread + spread * 0.4))
         local ss = size:add(vector2(spread * 2, spread * 2))
-        render.add_rect_filled(sp, sp:add(ss), color(0, 0, 0, a), radius + i * 1.2)
+        render.add_rect_filled(sp, sp:add(ss), color(0, 0, 0, a), radius + i)
     end
 end
 
--- ========== BRUSH ICON ==========
+-- ========== PLAYER PFP ==========
+function Library:LoadPfp()
+    if self.PfpLoaded then return end
+    self.PfpLoaded = true
+    local path = "icons/pfp_" .. _localuserid .. ".png"
+    local function load_tex()
+        local tex = render.load_texture(path)
+        if tex then self.PfpTexture = tex.id end
+    end
+    if file.exists(path) then
+        load_tex()
+    else
+        local url = "https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=" .. _localuserid .. "&size=48x48&format=Png"
+        http.get(url, function(body, status)
+            if status == 200 then
+                -- body is JSON: {"data":[{"targetId":...,"state":"Completed","imageUrl":"..."}]}
+                -- extract the imageUrl
+                local img_url = body:match('"imageUrl"%s*:%s*"([^"]+)"')
+                if img_url then
+                    http.get(img_url, function(img_body, img_status)
+                        if img_status == 200 then
+                            if not file.exists("icons/") then file.write("icons/.keep", "") end
+                            file.write(path, img_body, "binary")
+                            load_tex()
+                        end
+                    end)
+                end
+            end
+        end)
+    end
+end
+
+
 function Library:LoadBrushIcon()
     if self.BrushLoaded then return end
     self.BrushLoaded = true
@@ -430,6 +469,9 @@ end
 
 -- ========== WINDOW CREATION ==========
 function Library:CreateWindow(config)
+    -- start fetching pfp immediately so it's ready when the window shows
+    self:LoadPfp()
+
     local window = {
         Title = config.Title or "Window",
         Pos = config.Center and vector2(get_screen_size().x/2-(config.Size.x/2), get_screen_size().y/2-(config.Size.y/2)) or vector2(175,50),
@@ -540,6 +582,18 @@ function Library:SetWatermark(text) self.Watermark.Text=text; self.Watermark.Vis
 function Library:OpenWindow(window) window.Visible=true; window.TargetAlpha=1 end
 function Library:CloseWindow(window) window.TargetAlpha=0 end
 
+-- Convenience: drop a shadow strength slider into any groupbox
+-- Usage: Library:AddShadowSlider(myGroupbox)
+function Library:AddShadowSlider(groupbox)
+    return groupbox:AddSlider("shadow_strength", {
+        Text = "Shadow Strength",
+        Default = math.floor(self.ShadowStrength * 100),
+        Min = 0, Max = 100, Rounding = 0, Suffix = "%",
+        Callback = function(v) Library.ShadowStrength = v / 100 end,
+        Tooltip = "Controls shadow intensity on all UI elements"
+    })
+end
+
 -- ========== TOOLTIP ==========
 local function render_tooltip(alpha)
     if Library.Tooltip and Library.Tooltip.Text and alpha > 0.01 then
@@ -557,13 +611,22 @@ end
 -- ========== WATERMARK ==========
 local function draw_watermark()
     if not Library.Watermark.Visible then return end
+    if not Library.PfpLoaded then Library:LoadPfp() end
+    local pfp_size = 20
+    local pfp_pad = 4
     local ts = render.get_text_size(Library.Watermark.Text)
-    local wsz = vector2(ts.x+16, 24)
+    local has_pfp = Library.PfpTexture ~= nil
+    local pfp_offset = has_pfp and (pfp_size + pfp_pad * 2) or 0
+    local wsz = vector2(ts.x + 16 + pfp_offset, 28)
     local pos = Library.Watermark.Pos
     draw_shadow(pos, wsz, 6, 1)
     render.add_rect_filled(pos, pos:add(wsz), Library.MainColor, 6)
     render.add_rect(pos, pos:add(wsz), Library.OutlineColor, 6, 1)
-    render.add_text(pos:add(vector2(8,4)), Library.Watermark.Text, Library.FontColor)
+    if has_pfp then
+        local pfp_pos = pos:add(vector2(pfp_pad, pfp_pad))
+        render.add_texture(Library.PfpTexture, pfp_pos, pfp_pos:add(vector2(pfp_size, pfp_size)), 1)
+    end
+    render.add_text(pos:add(vector2(8 + pfp_offset, 5)), Library.Watermark.Text, Library.FontColor)
 end
 
 -- ========== MAIN RENDER HOOK ==========
@@ -694,6 +757,16 @@ hook.add("render", "auth_photon_render", function()
             render.add_rect_filled(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.BackgroundColor, wa), 10)
             render.add_rect(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.OutlineColor, wa), 10, 1)
             render.add_text(window.Pos:add(vector2(14,10)), window.Title, apply_alpha(Library.FontColor, wa))
+
+            -- pfp in top-right of title bar
+            if Library.PfpTexture then
+                local pfp_dim = 24
+                local pfp_pos = vector2(
+                    window.Pos.x + window.Size.x - pfp_dim - 6,
+                    window.Pos.y + 5
+                )
+                render.add_texture(Library.PfpTexture, pfp_pos, pfp_pos:add(vector2(pfp_dim, pfp_dim)), wa)
+            end
 
             local msp = window.Pos:add(vector2(12,36))
             local mss = vector2(window.Size.x-24, window.Size.y-48)
