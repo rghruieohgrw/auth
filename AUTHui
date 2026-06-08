@@ -47,7 +47,7 @@ local Library = {
         CurrentAlpha = 1.0,
         TargetAlpha = 1.0,
         State = "Idle",
-        Speed = 0.005,
+        Speed = 0.02,
         PendingTab = nil
     },
     ConfigFolder = "photon_configs/",
