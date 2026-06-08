@@ -1043,7 +1043,7 @@ hook.add("render", "auth_photon_render", function()
 
                             -- ColorPicker (Brush Icon Only - No Color Box)
                             elseif element.Type=="ColorPicker" then
-                                local icon_size = vector2(22, 22)
+                                local icon_size = vector2(48, 48)
                                 local icon_pos = ep:add(vector2(group_size.x-20-icon_size.x, 2))
                                 element.layout.pos = icon_pos
                                 element.layout.size = icon_size
@@ -1060,7 +1060,7 @@ hook.add("render", "auth_photon_render", function()
                                 -- Load and draw the brush icon from URL
                                 if not Library.BrushLoaded then Library:LoadBrushIcon() end
 if Library.BrushTexture then
-    local draw_size = vector2(18, 18)
+    local draw_size = vector2(48, 48)
     local draw_pos = icon_pos:add(vector2(
         (icon_size.x - draw_size.x) / 2,
         (icon_size.y - draw_size.y) / 2
