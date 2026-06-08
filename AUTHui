@@ -37,8 +37,8 @@ local Library = {
     ModalOpen = false,
     NotificationPosition = "Top Right",
     ConfigLoaded = false,
-    ConfigList = {}, -- List of available configs
-    CurrentConfig = "", -- Currently loaded config name
+    ConfigList = {},
+    CurrentConfig = "",
 
     WindowAlpha = 0,
     WindowTargetAlpha = 1,
@@ -48,24 +48,21 @@ local Library = {
         CurrentAlpha = 1.0,
         TargetAlpha = 1.0,
         State = "Idle",
-        Speed = 0.005,
+        Speed = 0.055,
         PendingTab = nil
     },
 
--- ========== CONFIG SYSTEM ==========
+    -- ========== CONFIG SYSTEM ==========
     ConfigFolder = "photon_configs/",
 
-    -- Get list of all config files by scanning the folder directly
     GetConfigList = function(self)
         local configs = {}
-        -- Ensure folder exists by writing a keep file if needed
         if not file.exists(self.ConfigFolder) then
             file.write(self.ConfigFolder .. ".keep", "")
         end
         local files = file.list_folder(self.ConfigFolder)
         if files then
             for _, name in ipairs(files) do
-                -- Only include .json files, skip manifest and .keep
                 local stem = name:match("^(.+)%.json$")
                 if stem and stem ~= "manifest" then
                     table.insert(configs, stem)
@@ -77,7 +74,6 @@ local Library = {
     end,
 
     SaveConfig = function(self, name)
-        -- Ensure folder exists
         if not file.exists(self.ConfigFolder) then
             file.write(self.ConfigFolder .. ".keep", "")
         end
@@ -90,12 +86,10 @@ local Library = {
             game = get_placeid()
         }
 
-        -- Save all toggles
         for id, toggle in pairs(self.Toggles) do
             config.toggles[id] = toggle.Value
         end
 
-        -- Save all options
         for id, opt in pairs(self.Options) do
             if opt.Type == "Slider" then
                 config.options[id] = { type = "Slider", value = opt.Value }
@@ -111,13 +105,11 @@ local Library = {
             end
         end
 
-        -- Save window positions
         config.windows = {}
         for i, win in ipairs(self.Windows) do
             config.windows[i] = { pos = { x = win.Pos.x, y = win.Pos.y } }
         end
 
-        -- Save watermark position
         config.watermark = { x = self.Watermark.Pos.x, y = self.Watermark.Pos.y }
 
         local json_str = self:TableToJSON(config)
@@ -126,7 +118,6 @@ local Library = {
         self.CurrentConfig = name
         self:Notify("Config saved: " .. name, 3)
 
-        -- Refresh dropdown from disk
         if self.ConfigDropdown then
             self.ConfigDropdown:SetValues(self:GetConfigList())
             self.ConfigDropdown:SetValue(name)
@@ -143,7 +134,6 @@ local Library = {
         end
 
         local json_str = file.read(filename)
-        -- Guard against empty files (e.g. a previously "deleted" config)
         if not json_str or json_str == "" then
             self:Notify("Config is empty: " .. name, 3)
             return false
@@ -201,7 +191,6 @@ local Library = {
     DeleteConfig = function(self, name)
         local filename = self.ConfigFolder .. name .. ".json"
         if file.exists(filename) then
-            -- Try proper delete first, fall back to overwriting with empty
             local ok = pcall(function() file.delete(filename) end)
             if not ok or file.exists(filename) then
                 file.write(filename, "")
@@ -242,36 +231,7 @@ local Library = {
         if self.ConfigDropdown then self.ConfigDropdown:SetValue("") end
         self:Notify("All settings reset!", 3)
     end,
-    
-    ListConfigs = function(self)
-        return self:GetConfigList()
-    end,
-    
-    ResetAll = function(self)
-        for id, toggle in pairs(self.Toggles) do
-            toggle:SetValue(false)
-        end
-        for id, opt in pairs(self.Options) do
-            if opt.Type == "Slider" then
-                opt:SetValue((opt.Min + opt.Max) / 2)
-            elseif opt.Type == "Dropdown" and not opt.Multi then
-                opt:SetValue(opt.Values[1])
-            elseif opt.Type == "Input" then
-                opt:SetValue("")
-            elseif opt.Type == "KeyPicker" then
-                opt:SetValue("...")
-            elseif opt.Type == "ColorPicker" then
-                opt:SetValue(color(1, 1, 1, 1))
-            end
-        end
-        self.CurrentConfig = ""
-        if self.ConfigDropdown then
-            self.ConfigDropdown:SetValue("")
-        end
-        self:Notify("All settings reset!", 3)
-    end,
-    
-    -- Simple JSON helpers
+
     TableToJSON = function(self, tbl)
         local function serialize(val)
             if type(val) == "string" then
@@ -308,7 +268,7 @@ local Library = {
         end
         return serialize(tbl)
     end,
-    
+
     JSONToTable = function(self, str)
         local safe_str = "return " .. str
         local func, err = load(safe_str, "json_parse")
@@ -321,7 +281,6 @@ local Library = {
         return nil
     end,
 
-    -- Create a config management dropdown (call this after creating your menu)
     CreateConfigDropdown = function(self, groupbox, id)
         local configs = self:GetConfigList()
         local dropdown = groupbox:AddDropdown(id, {
@@ -330,14 +289,12 @@ local Library = {
             Values = configs,
             Tooltip = "Select a config to load"
         })
-        
+
         self.ConfigDropdown = dropdown
-        
-        -- Add save button
+
         groupbox:AddButton({
             Text = "Save Current Config",
             Func = function()
-                -- Ask for config name via input
                 self:ShowConfigNameInput("Save Config", function(name)
                     if name and name ~= "" then
                         self:SaveConfig(name)
@@ -346,8 +303,7 @@ local Library = {
             end,
             Tooltip = "Save current settings to a config"
         })
-        
-        -- Add delete button
+
         groupbox:AddButton({
             Text = "Delete Selected Config",
             DoubleClick = true,
@@ -361,8 +317,7 @@ local Library = {
             end,
             Tooltip = "Double click to delete selected config"
         })
-        
-        -- Add reset button
+
         groupbox:AddButton({
             Text = "Reset All Settings",
             DoubleClick = true,
@@ -371,46 +326,23 @@ local Library = {
             end,
             Tooltip = "Double click to reset all settings to default"
         })
-        
-        -- Handle dropdown selection
+
         dropdown:OnChanged(function(value)
             if value and value ~= "" then
                 self:LoadConfig(value)
             end
         end)
-        
+
         return dropdown
     end,
-    
-    -- Show a modal input for config name
+
     ShowConfigNameInput = function(self, title, callback)
-        -- Create a simple input handler
-        local input_value = ""
-        local input_active = true
-        
-        local function handle_input()
-            if not input_active then return end
-            -- This would need a proper modal input system
-            -- For now, use a simple notification
-            self:Notify("Type config name in console", 3)
-            print("Enter config name for '" .. title .. "':")
-            -- In a real implementation, you'd have a proper input box
-        end
-        
-        handle_input()
-        
-        -- Simple console fallback
-        local function console_input()
-            -- This is a workaround - in practice you'd want a proper UI input
-            print("Config name prompt active - check console")
-        end
-        
-        console_input()
+        self:Notify("Type config name in console", 3)
+        print("Enter config name for '" .. title .. "':")
+        print("Config name prompt active - check console")
     end,
-    
-    -- Alternative: Create config management section with all features
+
     CreateConfigSection = function(self, groupbox)
-        -- Config dropdown
         local configs = self:GetConfigList()
         local dropdown = groupbox:AddDropdown("config_dropdown", {
             Text = "Load Config",
@@ -418,10 +350,9 @@ local Library = {
             Values = configs,
             Tooltip = "Select a config to load"
         })
-        
+
         self.ConfigDropdown = dropdown
-        
-        -- Save as new config button
+
         groupbox:AddButton({
             Text = "Save As New Config",
             Func = function()
@@ -429,8 +360,7 @@ local Library = {
             end,
             Tooltip = "Save current settings as a new config"
         })
-        
-        -- Overwrite current config button
+
         groupbox:AddButton({
             Text = "Overwrite Current",
             Func = function()
@@ -442,10 +372,9 @@ local Library = {
             end,
             Tooltip = "Save over the currently loaded config"
         })
-        
+
         groupbox:AddDivider()
-        
-        -- Delete button
+
         groupbox:AddButton({
             Text = "Delete Selected",
             DoubleClick = true,
@@ -459,8 +388,7 @@ local Library = {
             end,
             Tooltip = "Double click to delete selected config"
         })
-        
-        -- Reset button
+
         groupbox:AddButton({
             Text = "Reset to Defaults",
             DoubleClick = true,
@@ -469,8 +397,7 @@ local Library = {
             end,
             Tooltip = "Double click to reset all settings"
         })
-        
-        -- Refresh list button
+
         groupbox:AddButton({
             Text = "Refresh Config List",
             Func = function()
@@ -480,40 +407,20 @@ local Library = {
             end,
             Tooltip = "Refresh the config dropdown list"
         })
-        
-        -- Handle dropdown selection
+
         dropdown:OnChanged(function(value)
             if value and value ~= "" then
                 self:LoadConfig(value)
             end
         end)
-        
+
         return dropdown
     end,
-    
-    -- Show save config dialog using input box
+
     ShowSaveConfigDialog = function(self)
-        -- Create a temporary input handler
-        local temp_input_value = ""
-        local temp_input_active = true
-        
-        -- Create a simple modal notification
         self:Notify("Enter config name in console", 3)
         print("=== SAVE CONFIG ===")
-        print("Type the config name and press Enter:")
-        
-        -- We'll use a simple hook to capture input
-        local input_hook_id = "temp_config_input"
-        local original_active_input = self.ActiveInput
-        
-        -- This is a simplified version - in practice you'd create a proper input modal
-        local function on_input_capture()
-            -- This would capture console input
-            -- For now, just show a notification
-            print("Config name prompt - use Library:SaveConfig('name') directly")
-        end
-        
-        on_input_capture()
+        print("Use Library:SaveConfig('name') to save")
     end,
 
     LoadRemoteUI = function(self, url)
@@ -617,7 +524,7 @@ local Library = {
 }
 
 -- ─────────────────────────────────────────────
---  Key / char maps (COMPLETE)
+--  Key / char maps
 -- ─────────────────────────────────────────────
 local KEY_NAMES = {
     [0x01]="LMB",[0x02]="RMB",[0x04]="MB3",[0x05]="MB4",[0x06]="MB5",
@@ -709,9 +616,6 @@ local function draw_checkerboard(pos, size, sq)
     end
 end
 
--- ─────────────────────────────────────────────
---  Shadow helper
--- ─────────────────────────────────────────────
 local function draw_shadow(pos, size, radius, alpha_mult)
     local layers = 8
     for i = 1, layers do
@@ -776,14 +680,14 @@ local KeyPickerMethods = {}
 function KeyPickerMethods:IsActive()
     if not self.Value or self.Value == "..." then return false end
     local vk = nil
-    for code, name in pairs(KEY_NAMES) do 
-        if name == self.Value then vk = code; break end 
+    for code, name in pairs(KEY_NAMES) do
+        if name == self.Value then vk = code; break end
     end
     if not vk then return false end
-    if self.Mode == "Hold" then 
+    if self.Mode == "Hold" then
         return input.key_down(vk)
-    elseif self.Mode == "Toggle" then 
-        return self.Active or false 
+    elseif self.Mode == "Toggle" then
+        return self.Active or false
     end
     return input.key_down(vk)
 end
@@ -928,11 +832,9 @@ local function draw_watermark()
 end
 
 -- ─────────────────────────────────────────────
---  Main render hook (FIXED - shows without Photon menu)
+--  Main render hook
 -- ─────────────────────────────────────────────
 hook.add("render", "auth_photon_render", function()
-    -- CRITICAL FIX: No menu_active() check - menu shows even when Photon menu is closed
-    
     local anim = Library.Animation
     if anim.State == "FadingOut" then
         anim.CurrentAlpha = anim.CurrentAlpha - anim.Speed
@@ -956,7 +858,6 @@ hook.add("render", "auth_photon_render", function()
 
     Library.ModalOpen = Library.OpenedDropdown or Library.ActiveColorPicker or Library.ActiveKeyPicker or Library.ActiveInput or Library.RightClickMenu
 
-    -- ── dismiss modals on outside click ──
     if mpressed and Library.ModalOpen then
         if Library.OpenedDropdown then
             local dd = Library.OpenedDropdown
@@ -990,13 +891,11 @@ hook.add("render", "auth_photon_render", function()
         end
     end
 
-    -- ── window drag ──
     if Library.DraggingWindow then
         if mdown then Library.DraggingWindow.Pos = mp:subtract(Library.DragOffset)
         else Library.DraggingWindow=nil end
     end
 
-    -- ── slider drag ──
     if Library.ActiveSlider then
         if mdown then
             local s,l = Library.ActiveSlider.obj, Library.ActiveSlider.layout
@@ -1006,7 +905,6 @@ hook.add("render", "auth_photon_render", function()
         else Library.ActiveSlider=nil end
     end
 
-    -- ── colour picker drag ──
     if Library.ActiveColorPicker and mdown then
         local cp     = Library.ActiveColorPicker.obj
         local layout = Library.ActiveColorPicker.layout
@@ -1023,7 +921,6 @@ hook.add("render", "auth_photon_render", function()
         end
     end
 
-    -- ── watermark drag ──
     local ts_wm  = render.get_text_size(Library.Watermark.Text)
     local wm_size = vector2(ts_wm.x+16, 24)
     if not Library.DraggingWatermark and mpressed and is_mouse_in_rect(Library.Watermark.Pos, wm_size) then
@@ -1037,7 +934,6 @@ hook.add("render", "auth_photon_render", function()
     local can_interact = not Library.ModalOpen and anim.State=="Idle"
     Library.Tooltip = nil
 
-    -- ── windows (ALWAYS render if visible, regardless of menu_active()) ──
     for _, window in ipairs(Library.Windows) do
         if window.Visible then
             window.Alpha = window.Alpha + (window.TargetAlpha - window.Alpha) * 0.07
@@ -1059,7 +955,6 @@ hook.add("render", "auth_photon_render", function()
             local mss = vector2(window.Size.x-24, window.Size.y-48)
             render.add_rect_filled(msp, msp:add(mss), apply_alpha(Library.BackgroundColor, wa), 8)
 
-            -- tabs
             local tab_area_pos = msp:add(vector2(4,4))
             local tab_x = 0
             for _, tab in ipairs(window.Tabs) do
@@ -1107,7 +1002,6 @@ hook.add("render", "auth_photon_render", function()
                                 Library.Tooltip={Text=element.Tooltip, Element=element}
                             end
 
-                            -- Toggle
                             if element.Type=="Toggle" then
                                 local target_x = element.Value and 1 or 0
                                 element.SwitchAnim = element.SwitchAnim + (target_x - element.SwitchAnim) * 0.07
@@ -1131,7 +1025,6 @@ hook.add("render", "auth_photon_render", function()
                                     element:SetValue(not element.Value)
                                 end
 
-                            -- Slider
                             elseif element.Type=="Slider" then
                                 local ratio = (element.Value - element.Min) / (element.Max - element.Min)
                                 element.ThumbAnim = element.ThumbAnim + (ratio - element.ThumbAnim) * 0.08
@@ -1163,7 +1056,6 @@ hook.add("render", "auth_photon_render", function()
                                     Library.ActiveSlider={obj=element, layout={pos=s_pos, size=s_size}}
                                 end
 
-                            -- Button
                             elseif element.Type=="Button" then
                                 local b_pos  = ep
                                 local b_size = vector2(group_size.x-20, 24)
@@ -1188,7 +1080,6 @@ hook.add("render", "auth_photon_render", function()
                                     end
                                 end
 
-                            -- Dropdown
                             elseif element.Type=="Dropdown" then
                                 render.add_text(ep, element.Text, apply_alpha(Library.SecondaryFontColor, op))
                                 local d_pos  = ep:add(vector2(0,18))
@@ -1217,7 +1108,6 @@ hook.add("render", "auth_photon_render", function()
                                     Library.OpenedDropdown = element.Open and element or nil
                                 end
 
-                            -- Input
                             elseif element.Type=="Input" then
                                 render.add_text(ep, element.Text, apply_alpha(Library.SecondaryFontColor, op))
                                 local i_pos  = ep:add(vector2(0,18))
@@ -1237,7 +1127,6 @@ hook.add("render", "auth_photon_render", function()
                                     Library.ActiveInput=element
                                 end
 
-                            -- KeyPicker
                             elseif element.Type=="KeyPicker" then
                                 render.add_text(ep, element.Text, apply_alpha(Library.SecondaryFontColor, op))
                                 local k_pos  = ep:add(vector2(0,18))
@@ -1257,7 +1146,6 @@ hook.add("render", "auth_photon_render", function()
                                     Library.RightClickMenu={obj=element, pos=mp, Alpha=0}
                                 end
 
-                            -- ColorPicker
                             elseif element.Type=="ColorPicker" then
                                 local box_size = vector2(18,14)
                                 local box_pos  = ep:add(vector2(group_size.x-20-box_size.x, 4))
@@ -1276,12 +1164,10 @@ hook.add("render", "auth_photon_render", function()
                                     end
                                 end
 
-                            -- Divider
                             elseif element.Type=="Divider" then
                                 local dy = ep.y + element.Height/2
                                 render.add_line(vector2(ep.x,dy), vector2(ep.x+group_size.x-20,dy), apply_alpha(Library.OutlineColor,op), 1)
 
-                            -- Label
                             elseif element.Type=="Label" then
                                 render.add_text(ep:add(vector2(0,4)), element.Text, apply_alpha(Library.FontColor,op))
                             end
@@ -1298,12 +1184,19 @@ hook.add("render", "auth_photon_render", function()
         ::continue_window::
     end
 
-    -- ── dropdown list (drawn above everything) ──
+    -- ── dropdown list (opens to the right) ──
     if Library.OpenedDropdown then
         local e = Library.OpenedDropdown
-        local list_pos  = e.Layout.pos:add(vector2(0, e.Layout.size.y+2))
         local list_h    = math.min(#e.Values,6)*22+4
         local list_size = vector2(e.Layout.size.x, list_h)
+        local list_pos  = e.Layout.pos:add(vector2(e.Layout.size.x+2, 0))
+
+        -- Flip to left if off screen
+        local scr = get_screen_size()
+        if list_pos.x + list_size.x > scr.x - 4 then
+            list_pos = e.Layout.pos:add(vector2(-list_size.x-2, 0))
+        end
+
         e.Layout.list_pos  = list_pos
         e.Layout.list_size = list_size
         draw_shadow(list_pos, list_size, 6, 1)
@@ -1328,7 +1221,7 @@ hook.add("render", "auth_photon_render", function()
         end
     end
 
-    -- ── colour picker panel (SV square left, vertical hue+alpha bars right) ──
+    -- ── colour picker panel ──
     if Library.ActiveColorPicker then
         local e       = Library.ActiveColorPicker.obj
         local pad     = 8
@@ -1472,15 +1365,11 @@ hook.add("render", "auth_photon_render", function()
 end)
 
 -- ─────────────────────────────────────────────
---  Key handler (FIXED)
+--  Key handler
 -- ─────────────────────────────────────────────
 hook.add("init", "auth_key_handler_init", function()
-    -- Use a render loop to check for key picker input instead of hook.addkey
-    -- This is more reliable with Photon
     hook.add("render", "key_picker_capture", function()
-        -- Key picker capture (checks every frame when picking)
         if Library.ActiveKeyPicker then
-            -- Check all possible keys
             for vk, name in pairs(KEY_NAMES) do
                 if input.is_key_pressed(vk) then
                     Library.ActiveKeyPicker.obj:SetValue(name)
@@ -1493,13 +1382,12 @@ hook.add("init", "auth_key_handler_init", function()
         end
     end)
 
-    -- Handle toggle mode key states
     hook.add("render", "toggle_keys_handler", function()
         for id, opt in pairs(Library.Options) do
             if opt.Type == "KeyPicker" and opt.Mode == "Toggle" and opt.Value and opt.Value ~= "..." then
                 local vk = nil
-                for code, name in pairs(KEY_NAMES) do 
-                    if name == opt.Value then vk = code; break end 
+                for code, name in pairs(KEY_NAMES) do
+                    if name == opt.Value then vk = code; break end
                 end
                 if vk and input.is_key_pressed(vk) then
                     opt.Active = not opt.Active
@@ -1510,15 +1398,14 @@ hook.add("init", "auth_key_handler_init", function()
         end
     end)
 
-    -- Text input handler
     hook.add("render", "text_input_handler", function()
         if Library.ActiveInput then
             for vk, char in pairs(CHAR_MAP_NORMAL) do
                 if input.is_key_pressed(vk) then
-                    if vk == 0x08 then -- Backspace
+                    if vk == 0x08 then
                         local v = Library.ActiveInput.Value
                         if #v > 0 then Library.ActiveInput:SetValue(string.sub(v, 1, -2)) end
-                    elseif vk == 0x0D or vk == 0x1B then -- Enter or Escape
+                    elseif vk == 0x0D or vk == 0x1B then
                         Library.ActiveInput = nil
                     else
                         local shift = input.key_down(0x10)
@@ -1531,7 +1418,6 @@ hook.add("init", "auth_key_handler_init", function()
         end
     end)
 
-    -- Menu toggle key (works even when Photon menu is closed)
     local last_menu_press = 0
     hook.add("render", "menu_toggle_handler", function()
         local menu_key_obj = Library.Options.menu_key
@@ -1542,7 +1428,7 @@ hook.add("init", "auth_key_handler_init", function()
             end
             if vk and input.is_key_pressed(vk) then
                 local now = get_tickcount()
-                if now - last_menu_press > 200 then -- Debounce
+                if now - last_menu_press > 200 then
                     for _, w in ipairs(Library.Windows) do
                         if w.TargetAlpha > 0.5 then
                             w.TargetAlpha = 0
@@ -1559,7 +1445,6 @@ hook.add("init", "auth_key_handler_init", function()
     end)
 end)
 
--- Default menu keybind
 Library.Options.menu_key = Library.Options.menu_key or { Value = "Insert", Mode = "Toggle" }
 
 _G.Library = Library
