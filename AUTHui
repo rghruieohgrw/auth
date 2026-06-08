@@ -1,6 +1,4 @@
--- Complete Working Photon UI Library WITH SCROLLING (FULL VERSION)
--- All original functionality preserved, scrolling added
-
+-- Complete Working Photon UI Library WITH DRAGGABLE SCROLLBAR
 -- Resolve local player username at load time
 local _players = game:get_service("Players")
 local _localname = _players and _players.local_player and _players.local_player.name or "unknown"
@@ -38,6 +36,7 @@ local Library = {
     ConfigLoaded = false,
     ConfigList = {},
     CurrentConfig = "",
+    ScrollbarData = {}, -- Store scrollbar data for tabs
 
     WindowAlpha = 0,
     WindowTargetAlpha = 1,
@@ -50,11 +49,6 @@ local Library = {
         Speed = 0.055,
         PendingTab = nil
     },
-
-    -- ========== SCROLLING PROPERTIES (ADDED) ==========
-    TabScrollOffsets = {},
-    TabMaxScroll = {},
-    TabContentHeight = {},
 
     -- ========== CONFIG SYSTEM ==========
     ConfigFolder = "photon_configs/",
@@ -631,6 +625,52 @@ local function draw_shadow(pos, size, radius, alpha_mult)
     end
 end
 
+-- Scrollbar drawing function
+local function DrawScrollbar(pos, size, scrollPercent, isHovering, isDragging, alpha, accentColor)
+    local scrollbarWidth = 6
+    local thumbMinHeight = 30
+    local trackHeight = size.y
+    local thumbHeight = math.max(thumbMinHeight, trackHeight * 0.3)
+    local thumbY = pos.y + (scrollPercent * (trackHeight - thumbHeight))
+    
+    -- Track background
+    render.add_rect_filled(
+        vector2(pos.x + size.x - scrollbarWidth - 4, pos.y),
+        vector2(pos.x + size.x - 4, pos.y + trackHeight),
+        apply_alpha(color(0.08, 0.08, 0.10, 1), alpha), 4
+    )
+    
+    -- Thumb color
+    local thumbColor = accentColor
+    if isHovering or isDragging then
+        thumbColor = color(
+            math.min(1, accentColor.r * 1.2),
+            math.min(1, accentColor.g * 1.2),
+            math.min(1, accentColor.b * 1.2), 1)
+    end
+    
+    -- Thumb shadow
+    render.add_rect_filled(
+        vector2(pos.x + size.x - scrollbarWidth - 6, thumbY),
+        vector2(pos.x + size.x - 2, thumbY + thumbHeight),
+        apply_alpha(color(0,0,0,0.25), alpha), 4
+    )
+    
+    -- Thumb
+    render.add_rect_filled(
+        vector2(pos.x + size.x - scrollbarWidth - 4, thumbY),
+        vector2(pos.x + size.x - 4, thumbY + thumbHeight),
+        apply_alpha(thumbColor, alpha * 0.85), 4
+    )
+    
+    -- Thumb border (thin accent)
+    render.add_rect(
+        vector2(pos.x + size.x - scrollbarWidth - 4, thumbY),
+        vector2(pos.x + size.x - 4, thumbY + thumbHeight),
+        apply_alpha(accentColor, alpha * 0.4), 4, 0.5
+    )
+end
+
 -- ─────────────────────────────────────────────
 --  Element base
 -- ─────────────────────────────────────────────
@@ -712,7 +752,7 @@ function ColorPickerMethods:SetValue(val)
 end
 
 -- ─────────────────────────────────────────────
---  Window creation WITH SCROLLING SUPPORT
+--  Window creation
 -- ─────────────────────────────────────────────
 function Library:CreateWindow(config)
     local window = {
@@ -724,6 +764,7 @@ function Library:CreateWindow(config)
         ActiveTab = nil,
         Alpha     = config.AutoShow and 1 or 0,
         TargetAlpha = config.AutoShow and 1 or 0,
+        ScrollData = {}, -- Store scroll data per tab
     }
 
     function window:AddTab(name)
@@ -733,7 +774,7 @@ function Library:CreateWindow(config)
         function tab:AddRightGroupbox(name,info) return self:AddGroupbox({Name=name,Side="Right",Dependencies=info and info.Dependencies or nil}) end
         
         function tab:AddGroupbox(info)
-            local groupbox = {Name=info.Name, Side=info.Side or "Left", Parent=tab, Elements={}, Dependencies=info.Dependencies, CachedHeight=0}
+            local groupbox = {Name=info.Name, Side=info.Side or "Left", Parent=tab, Elements={}, Dependencies=info.Dependencies}
 
             function groupbox:IsVisible()
                 if not self.Dependencies then return true end
@@ -839,7 +880,7 @@ local function draw_watermark()
 end
 
 -- ─────────────────────────────────────────────
---  Main render hook WITH SCROLLING
+--  Main render hook WITH DRAGGABLE SCROLLBAR
 -- ─────────────────────────────────────────────
 hook.add("render", "auth_photon_render", function()
     local anim = Library.Animation
@@ -862,7 +903,6 @@ hook.add("render", "auth_photon_render", function()
     local mp        = input.get_mouse_position()
     local mpressed  = input.is_key_pressed(0x01)
     local mdown     = input.key_down(0x01)
-    local scroll_delta = input.get_mouse_scroll()
 
     Library.ModalOpen = Library.OpenedDropdown or Library.ActiveColorPicker or Library.ActiveKeyPicker or Library.ActiveInput or Library.RightClickMenu
 
@@ -982,16 +1022,17 @@ hook.add("render", "auth_photon_render", function()
             end
 
             local tab_container = msp:add(vector2(0,36))
-            local content_area = tab_container:add(vector2(4,4))
-            local viewport_height = window.Size.y - 130
-            local tab = window.ActiveTab
-            
-            if tab and anim.CurrentAlpha > 0 then
+            if window.ActiveTab and anim.CurrentAlpha > 0 then
                 local op = anim.CurrentAlpha * wa
+                local content_area = tab_container:add(vector2(4,4))
                 
-                -- Calculate content height
+                -- Calculate content height and viewport
+                local viewport_height = window.Size.y - 130
                 local left_total = 0
                 local right_total = 0
+                local tab = window.ActiveTab
+                
+                -- Calculate heights
                 for _, groupbox in ipairs(tab.Groupboxes) do
                     if groupbox:IsVisible() then
                         local gb_height = 32
@@ -1007,28 +1048,63 @@ hook.add("render", "auth_photon_render", function()
                     end
                 end
                 local total_height = math.max(left_total, right_total)
+                local max_scroll = math.max(0, total_height - viewport_height)
                 
-                -- Handle scroll wheel
-                if scroll_delta ~= 0 and is_mouse_in_rect(content_area, vector2(window.Size.x-24, viewport_height)) then
-                    tab.ScrollOffset = math.clamp(tab.ScrollOffset - (scroll_delta * 20), 0, math.max(0, total_height - viewport_height))
+                -- Scrollbar data
+                if not window.ScrollData[tab] then
+                    window.ScrollData[tab] = {
+                        dragging = false,
+                        dragStartY = 0,
+                        dragStartOffset = 0
+                    }
                 end
+                local scrollData = window.ScrollData[tab]
+                
+                -- Scrollbar area
+                local scrollbarX = content_area.x + (window.Size.x - 48)
+                local scrollbarArea = {
+                    x = scrollbarX,
+                    y = content_area.y,
+                    w = 10,
+                    h = viewport_height
+                }
+                local isHoveringScrollbar = is_mouse_in_rect(vector2(scrollbarArea.x, scrollbarArea.y), vector2(scrollbarArea.w, scrollbarArea.h))
+                
+                -- Handle scrollbar dragging
+                if mpressed and isHoveringScrollbar and can_interact and not Library.ModalOpen then
+                    scrollData.dragging = true
+                    scrollData.dragStartY = mp.y
+                    scrollData.dragStartOffset = tab.ScrollOffset or 0
+                end
+                
+                if scrollData.dragging and mdown then
+                    local deltaY = mp.y - scrollData.dragStartY
+                    local scrollPercent = deltaY / viewport_height
+                    local newOffset = scrollData.dragStartOffset + (scrollPercent * max_scroll)
+                    tab.ScrollOffset = math.clamp(newOffset, 0, max_scroll)
+                else
+                    scrollData.dragging = false
+                end
+                
+                -- Set default scroll offset
+                tab.ScrollOffset = tab.ScrollOffset or 0
+                tab.ScrollOffset = math.clamp(tab.ScrollOffset, 0, max_scroll)
                 
                 -- Draw scrollbar
-                local needs_scrollbar = total_height > viewport_height
-                local scrollbar_x = content_area.x + (window.Size.x - 48)
-                local scrollbar_height = viewport_height
-                local scrollbar_thumb_height = math.max(40, (viewport_height / math.max(1, total_height)) * viewport_height)
-                local scrollbar_thumb_pos = content_area.y + (tab.ScrollOffset / math.max(1, total_height - viewport_height)) * (viewport_height - scrollbar_thumb_height)
+                local scrollPercent = max_scroll > 0 and tab.ScrollOffset / max_scroll or 0
+                DrawScrollbar(
+                    vector2(scrollbarArea.x, scrollbarArea.y),
+                    vector2(scrollbarArea.w, scrollbarArea.h),
+                    scrollPercent,
+                    isHoveringScrollbar,
+                    scrollData.dragging,
+                    op,
+                    accent
+                )
                 
-                if needs_scrollbar then
-                    render.add_rect_filled(vector2(scrollbar_x, content_area.y), vector2(scrollbar_x+6, content_area.y+scrollbar_height), apply_alpha(color(0.1,0.1,0.12,1), op), 3)
-                    render.add_rect_filled(vector2(scrollbar_x, scrollbar_thumb_pos), vector2(scrollbar_x+6, scrollbar_thumb_pos+scrollbar_thumb_height), apply_alpha(Library.AccentColor, op * 0.7), 3)
-                end
-                
-                -- Clip content
+                -- Render content with clip rect
                 render.push_clip_rect(content_area, vector2(window.Size.x-36, viewport_height))
                 
-                -- Render groupboxes
                 local left_y = 0
                 local right_y = 0
                 for _, groupbox in ipairs(tab.Groupboxes) do
@@ -1037,7 +1113,6 @@ hook.add("render", "auth_photon_render", function()
                         local y_off = (groupbox.Side=="Left") and left_y or right_y
                         local group_pos = content_area:add(vector2(side_off, y_off - tab.ScrollOffset))
                         
-                        -- Only render if visible
                         if group_pos.y + groupbox.CachedHeight > content_area.y and group_pos.y < content_area.y + viewport_height then
                             local group_size = vector2(window.Size.x/2 - 24, groupbox.CachedHeight)
                             
@@ -1239,7 +1314,7 @@ hook.add("render", "auth_photon_render", function()
         ::continue_window::
     end
 
-    -- Dropdown list rendering (preserved from original)
+    -- Dropdown list rendering
     if Library.OpenedDropdown then
         local e = Library.OpenedDropdown
         local list_h    = math.min(#e.Values,6)*22+4
@@ -1275,7 +1350,7 @@ hook.add("render", "auth_photon_render", function()
         end
     end
 
-    -- Color picker panel (preserved from original)
+    -- Color picker panel
     if Library.ActiveColorPicker then
         local e       = Library.ActiveColorPicker.obj
         local pad     = 8
@@ -1346,7 +1421,7 @@ hook.add("render", "auth_photon_render", function()
         end
     end
 
-    -- Right-click menu (preserved from original)
+    -- Right-click menu
     if Library.RightClickMenu then
         local rcm     = Library.RightClickMenu
         local options = {"Always","Hold","Toggle"}
@@ -1380,7 +1455,7 @@ hook.add("render", "auth_photon_render", function()
         end
     end
 
-    -- Notifications (preserved from original)
+    -- Notifications
     local scr_w, scr_h = get_screen_size().x, get_screen_size().y
     local nx, ny, vdir = 20, 50, 1
     if     Library.NotificationPosition=="Top Right"    then nx=scr_w-290; ny=50
@@ -1415,4 +1490,4 @@ hook.add("render", "auth_photon_render", function()
     render_tooltip(Library.TooltipAlpha)
 end)
 
-print("[AUTHui] Library loaded with SCROLLING support - ALL original features preserved!")
+print("[AUTHui] Library loaded with DRAGGABLE SCROLLBAR!")
