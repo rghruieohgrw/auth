@@ -918,17 +918,20 @@ hook.add("render", "auth_photon_render", function()
                                 render.add_rect_filled(swatch_pos, swatch_pos:add(swatch_size), color(element.Value.r, element.Value.g, element.Value.b, op), 5)
                                 render.add_rect(swatch_pos, swatch_pos:add(swatch_size), color(0,0,0,0.3*op), 5, 1)
 
-                                                                -- texture icon centered in button (left of swatch)
+                                -- texture icon centered in button (left of swatch)
                                 if not Library.BrushLoaded then Library:LoadBrushIcon() end
                                 if Library.BrushTexture then
-                                    local ico = vector2(150, 130)  -- Your image's actual size
+                                    local img_w = 195
+                                    local img_h = 130
+                                    local btn_h = icon_size.y - 12  -- Smaller padding (was 8, now 12)
+                                    local scale = btn_h / img_h
+                                    local ico = vector2(img_w * scale, btn_h)
                                     local ico_pos = vector2(
                                         icon_pos.x + (icon_size.x - ico.x) / 2,
                                         icon_pos.y + (icon_size.y - ico.y) / 2
                                     )
                                     render.add_texture(Library.BrushTexture, ico_pos, ico_pos:add(ico), op)
                                 end
-
                                 if not Library.DraggingWindow and mpressed and is_mouse_in_rect(icon_pos, icon_size) and can_interact then
                                     element.Open = not element.Open
                                     Library.ActiveColorPicker = element.Open and {obj=element, layout=element.layout} or nil
