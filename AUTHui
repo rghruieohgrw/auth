@@ -474,21 +474,20 @@ local function draw_shadow(pos, size, radius, alpha_mult)
     end
 end
 
--- ========== LOAD ICONS FROM URL ==========
+-- ========== LOAD BRUSH ICON FROM URL ==========
 Library.BrushTexture = nil
-Library.ColorIconTexture = nil
-Library.IconsLoaded = false
+Library.BrushLoaded = false
 
-function Library:LoadIcons()
-    if self.IconsLoaded then return end
-    
-    -- Brush icon
+function Library:LoadBrushIcon()
+    if self.BrushLoaded then return end
+    self.BrushLoaded = true  -- set immediately to prevent re-entry
+
     local brush_path = "icons/brush.png"
     if file.exists(brush_path) then
         local tex = render.load_texture(brush_path)
         if tex then self.BrushTexture = tex.id end
     else
-        http.get("https://raw.githubusercontent.com/rghruieohgrw/visuals/main/visuals.png", function(body, status)
+        http.get("https://raw.githubusercontent.com/rghruieohgrw/visuals/refs/heads/main/color.png", function(body, status)
             if status == 200 then
                 if not file.exists("icons/") then file.write("icons/.keep", "") end
                 file.write(brush_path, body, "binary")
@@ -497,25 +496,8 @@ function Library:LoadIcons()
             end
         end)
     end
-    
-    -- Color palette icon (optional - for a different button)
-    local color_path = "icons/color.png"
-    if file.exists(color_path) then
-        local tex = render.load_texture(color_path)
-        if tex then self.ColorIconTexture = tex.id end
-    else
-        http.get("https://raw.githubusercontent.com/rghruieohgrw/visuals/refs/heads/main/color.png", function(body, status)
-            if status == 200 then
-                if not file.exists("icons/") then file.write("icons/.keep", "") end
-                file.write(color_path, body, "binary")
-                local tex = render.load_texture(color_path)
-                if tex then self.ColorIconTexture = tex.id end
-            end
-        end)
-    end
-    
-    self.IconsLoaded = true
 end
+
 -- ========== ELEMENT METHODS ==========
 local ElementMethods = {}
 function ElementMethods:OnChanged(func) self.OnChangedFunc = func; return self end
@@ -1061,13 +1043,13 @@ hook.add("render", "auth_photon_render", function()
 
                             -- ColorPicker (Brush Icon Only - No Color Box)
                             elseif element.Type=="ColorPicker" then
-                                local icon_size = vector2(32, 32)  -- Changed from 22 to 32 (bigger!)
-                                local icon_pos = ep:add(vector2(group_size.x-20-icon_size.x, 0))  -- Adjusted position
+                                local icon_size = vector2(22, 22)
+                                local icon_pos = ep:add(vector2(group_size.x-20-icon_size.x, 2))
                                 element.layout.pos = icon_pos
                                 element.layout.size = icon_size
                                 
-                                -- Draw the label (moved up slightly to align with bigger icon)
-                                render.add_text(ep:add(vector2(0,8)), element.Text, apply_alpha(Library.SecondaryFontColor, op))
+                                -- Draw the label
+                                render.add_text(ep:add(vector2(0,5)), element.Text, apply_alpha(Library.SecondaryFontColor, op))
                                 
                                 -- Draw brush button background
                                 local is_hover = is_mouse_in_rect(icon_pos, icon_size)
@@ -1076,21 +1058,17 @@ hook.add("render", "auth_photon_render", function()
                                 render.add_rect(icon_pos, icon_pos:add(icon_size), apply_alpha(Library.OutlineColor, op), 6, 1)
                                 
                                 -- Load and draw the brush icon from URL
-                                if not Library.BrushLoaded then Library:LoadBrushIcon() end
-                                
-                                if Library.BrushTexture then
-                                    -- Use the downloaded image (padding 4px inside the 32x32 button)
-                                    render.add_texture(Library.BrushTexture, icon_pos:add(vector2(4,4)), icon_pos:add(icon_size):subtract(vector2(4,4)), 0.9 * op)
-                                else
-                                    -- Fallback: draw larger brush shape
-                                    local center = icon_pos:add(vector2(icon_size.x/2, icon_size.y/2))
-                                    render.add_line(center:add(vector2(-8, -6)), center:add(vector2(7, 11)), apply_alpha(Library.FontColor, 0.9 * op), 2.5)
-                                    render.add_line(center:add(vector2(6, 10)), center:add(vector2(11, 11)), apply_alpha(Library.FontColor, 0.7 * op), 2)
-                                    render.add_line(center:add(vector2(6, 9)), center:add(vector2(12, 10)), apply_alpha(Library.FontColor, 0.7 * op), 2)
-                                    render.add_line(center:add(vector2(5, 8)), center:add(vector2(11, 9)), apply_alpha(Library.FontColor, 0.7 * op), 2)
-                                    render.add_circle_filled(center:add(vector2(-7, -5)), 3.5, apply_alpha(Library.AccentColor, 0.9 * op))
-                                    render.add_circle_filled(center:add(vector2(3, 10)), 2, apply_alpha(Library.FontColor, 0.8 * op))
-                                end
+                                local c  = icon_pos:add(vector2(icon_size.x / 2, icon_size.y / 2))
+local fc = apply_alpha(Library.FontColor, op)
+local ac = apply_alpha(Library.AccentColor, op)
+local sc = apply_alpha(Library.SecondaryFontColor, op)
+-- handle
+render.add_line(c:add(vector2(-7, -7)), c:add(vector2(3, 3)), fc, 2)
+-- ferrule band
+render.add_line(c:add(vector2(2, 2)), c:add(vector2(4, 4)), sc, 3)
+-- bristle tip
+render.add_circle_filled(c:add(vector2(6, 6)), 4, ac)
+render.add_circle(c:add(vector2(6, 6)), 4, apply_alpha(color(0, 0, 0, 1), op * 0.3), 1)
                                 
                                 -- Click to open color picker panel
                                 if not Library.DraggingWindow and mpressed and is_mouse_in_rect(icon_pos, icon_size) and can_interact then
@@ -1157,72 +1135,140 @@ hook.add("render", "auth_photon_render", function()
     -- colour picker panel
     if Library.ActiveColorPicker then
         local e = Library.ActiveColorPicker.obj
-        local pad = 8
-        local sv_dim = 135
-        local bar_w = 12
-        local bar_gap = 6
-        local bars_x = pad + sv_dim + pad
-        local num_bars = e.EnableAlpha and 2 or 1
-        local p_w = bars_x + bar_w * num_bars + bar_gap * (num_bars-1) + pad
-        local p_h = pad + sv_dim + pad
-        local p_size = vector2(p_w, p_h)
 
-        local scr = get_screen_size()
+        local pad        = 10
+        local sv_dim     = 150
+        local bar_w      = 14
+        local bar_r      = 5       -- bar corner radius
+        local bar_gap    = 6
+        local swatch_h   = 22
+        local swatch_gap = 8
+
+        local num_bars   = e.EnableAlpha and 2 or 1
+        local bars_x     = pad + sv_dim + pad
+        local p_w        = bars_x + bar_w * num_bars + bar_gap * (num_bars - 1) + pad
+        local p_h        = pad + sv_dim + swatch_gap + swatch_h + pad
+        local p_size     = vector2(p_w, p_h)
+
+        local scr   = get_screen_size()
         local p_pos = e.layout.pos:add(vector2(e.layout.size.x + 8, 0))
         if p_pos.x + p_w > scr.x - 4 then p_pos = vector2(e.layout.pos.x - p_w - 8, p_pos.y) end
         if p_pos.y + p_h > scr.y - 4 then p_pos = vector2(p_pos.x, scr.y - p_h - 4) end
 
-        e.layout.picker_pos = p_pos
+        e.layout.picker_pos  = p_pos
         e.layout.picker_size = p_size
 
-        draw_shadow(p_pos, p_size, 8, 1)
-        render.add_rect_filled(p_pos, p_pos:add(p_size), Library.MainColor, 8)
-        render.add_rect(p_pos, p_pos:add(p_size), Library.OutlineColor, 8, 1)
+        -- panel background
+        draw_shadow(p_pos, p_size, 10, 1)
+        render.add_rect_filled(p_pos, p_pos:add(p_size), Library.MainColor, 10)
+        render.add_rect(p_pos, p_pos:add(p_size), Library.OutlineColor, 10, 1)
 
-        local sv_pos = p_pos:add(vector2(pad, pad))
+        -- ── SV field ──────────────────────────────────────────────
+        local sv_pos  = p_pos:add(vector2(pad, pad))
         local sv_size = vector2(sv_dim, sv_dim)
-        e.layout.sv_pos = sv_pos
+        e.layout.sv_pos  = sv_pos
         e.layout.sv_size = sv_size
 
-        local ahr = hsv_to_rgb(e.Hue, 1, 1)
-        render.add_rect_filled(sv_pos, sv_pos:add(sv_size), color(1,1,1,1), 0)
-        for i = 0, sv_size.x-1 do
-            render.add_line(sv_pos:add(vector2(i,0)), sv_pos:add(vector2(i,sv_size.y)), color(ahr.r,ahr.g,ahr.b, i/sv_size.x), 1)
-        end
-        for i = 0, sv_size.y-1 do
-            render.add_line(sv_pos:add(vector2(0,i)), sv_pos:add(vector2(sv_size.x,i)), color(0,0,0, i/sv_size.y), 1)
-        end
-        render.add_rect(sv_pos, sv_pos:add(sv_size), Library.OutlineColor, 0, 1)
+        local hue_rgb = hsv_to_rgb(e.Hue, 1, 1)
 
+        -- white → hue (horizontal), then ×black (vertical)
+        render.add_rect_filled(sv_pos, sv_pos:add(sv_size), color(1, 1, 1, 1), bar_r)
+        for i = 0, sv_size.x - 1 do
+            render.add_line(
+                sv_pos:add(vector2(i, 0)),
+                sv_pos:add(vector2(i, sv_size.y)),
+                color(hue_rgb.r, hue_rgb.g, hue_rgb.b, i / (sv_size.x - 1)), 1)
+        end
+        for i = 0, sv_size.y - 1 do
+            render.add_line(
+                sv_pos:add(vector2(0, i)),
+                sv_pos:add(vector2(sv_size.x, i)),
+                color(0, 0, 0, i / (sv_size.y - 1)), 1)
+        end
+        render.add_rect(sv_pos, sv_pos:add(sv_size), Library.OutlineColor, bar_r, 1)
+
+        -- crosshair cursor
         local cx = sv_pos.x + sv_size.x * e.Saturation
         local cy = sv_pos.y + sv_size.y * (1 - e.ValueHSV)
-        render.add_circle(vector2(cx,cy), 5, e.ValueHSV>0.5 and color(0,0,0,1) or color(1,1,1,1), 1)
+        local rim = e.ValueHSV > 0.4 and color(0, 0, 0, 1) or color(1, 1, 1, 1)
+        render.add_circle(vector2(cx, cy), 6, color(0, 0, 0, 0.5), 1)   -- shadow ring
+        render.add_circle(vector2(cx, cy), 5, rim, 1)                    -- white/black rim
+        render.add_circle_filled(vector2(cx, cy), 3, hsv_to_rgb(e.Hue, e.Saturation, e.ValueHSV, 1))
 
-        local hue_pos = p_pos:add(vector2(bars_x, pad))
+        -- ── hue bar ───────────────────────────────────────────────
+        local hue_pos  = p_pos:add(vector2(bars_x, pad))
         local hue_size = vector2(bar_w, sv_dim)
-        e.layout.hue_pos = hue_pos
+        e.layout.hue_pos  = hue_pos
         e.layout.hue_size = hue_size
-        for i = 0, hue_size.y-1 do
-            render.add_line(hue_pos:add(vector2(0,i)), hue_pos:add(vector2(hue_size.x,i)), hsv_to_rgb(i/hue_size.y,1,1), 1)
-        end
-        render.add_rect(hue_pos, hue_pos:add(hue_size), Library.OutlineColor, 0, 1)
-        local hcy = hue_pos.y + hue_size.y * e.Hue
-        render.add_rect(vector2(hue_pos.x-2, hcy-2), vector2(hue_pos.x+hue_size.x+2, hcy+2), color(1,1,1,1), 2, 1)
 
-        if e.EnableAlpha then
-            local a_pos = p_pos:add(vector2(bars_x + bar_w + bar_gap, pad))
-            local a_size = vector2(bar_w, sv_dim)
-            e.layout.alpha_pos = a_pos
-            e.layout.alpha_size = a_size
-            draw_checkerboard(a_pos, a_size, 4)
-            local rop = hsv_to_rgb(e.Hue, e.Saturation, e.ValueHSV)
-            for i = 0, a_size.y-1 do
-                render.add_line(a_pos:add(vector2(0,i)), a_pos:add(vector2(a_size.x,i)), color(rop.r,rop.g,rop.b, i/a_size.y), 1)
-            end
-            render.add_rect(a_pos, a_pos:add(a_size), Library.OutlineColor, 0, 1)
-            local acy = a_pos.y + a_size.y * e.Alpha
-            render.add_rect(vector2(a_pos.x-2, acy-2), vector2(a_pos.x+a_size.x+2, acy+2), color(1,1,1,1), 2, 1)
+        for i = 0, hue_size.y - 1 do
+            render.add_line(
+                hue_pos:add(vector2(0, i)),
+                hue_pos:add(vector2(hue_size.x, i)),
+                hsv_to_rgb(i / (hue_size.y - 1), 1, 1), 1)
         end
+        render.add_rect(hue_pos, hue_pos:add(hue_size), Library.OutlineColor, bar_r, 1)
+
+        -- pill thumb
+        local hcy     = hue_pos.y + hue_size.y * e.Hue
+        local thumb_h = 6
+        render.add_rect_filled(
+            vector2(hue_pos.x - 2, hcy - thumb_h / 2),
+            vector2(hue_pos.x + hue_size.x + 2, hcy + thumb_h / 2),
+            color(1, 1, 1, 1), 3)
+        render.add_rect(
+            vector2(hue_pos.x - 2, hcy - thumb_h / 2),
+            vector2(hue_pos.x + hue_size.x + 2, hcy + thumb_h / 2),
+            color(0, 0, 0, 0.4), 3, 1)
+
+        -- ── alpha bar (optional) ───────────────────────────────────
+        if e.EnableAlpha then
+            local a_pos  = p_pos:add(vector2(bars_x + bar_w + bar_gap, pad))
+            local a_size = vector2(bar_w, sv_dim)
+            e.layout.alpha_pos  = a_pos
+            e.layout.alpha_size = a_size
+
+            draw_checkerboard(a_pos, a_size, 4)
+            local base_rgb = hsv_to_rgb(e.Hue, e.Saturation, e.ValueHSV)
+            for i = 0, a_size.y - 1 do
+                render.add_line(
+                    a_pos:add(vector2(0, i)),
+                    a_pos:add(vector2(a_size.x, i)),
+                    color(base_rgb.r, base_rgb.g, base_rgb.b, i / (a_size.y - 1)), 1)
+            end
+            render.add_rect(a_pos, a_pos:add(a_size), Library.OutlineColor, bar_r, 1)
+
+            local acy = a_pos.y + a_size.y * e.Alpha
+            render.add_rect_filled(
+                vector2(a_pos.x - 2, acy - thumb_h / 2),
+                vector2(a_pos.x + a_size.x + 2, acy + thumb_h / 2),
+                color(1, 1, 1, 1), 3)
+            render.add_rect(
+                vector2(a_pos.x - 2, acy - thumb_h / 2),
+                vector2(a_pos.x + a_size.x + 2, acy + thumb_h / 2),
+                color(0, 0, 0, 0.4), 3, 1)
+        end
+
+        -- ── colour swatch + hex label ──────────────────────────────
+        local sw_y   = pad + sv_dim + swatch_gap
+        local sw_pos = p_pos:add(vector2(pad, sw_y))
+        local sw_size = vector2(sv_dim, swatch_h)
+
+        draw_checkerboard(sw_pos, sw_size, 5)
+        render.add_rect_filled(sw_pos, sw_pos:add(sw_size),
+            color(e.Value.r, e.Value.g, e.Value.b, e.Alpha), bar_r)
+        render.add_rect(sw_pos, sw_pos:add(sw_size), Library.OutlineColor, bar_r, 1)
+
+        -- hex string  e.g.  #B8B8D4
+        local hr = string.format("%02X", math.floor(e.Value.r * 255))
+        local hg = string.format("%02X", math.floor(e.Value.g * 255))
+        local hb = string.format("%02X", math.floor(e.Value.b * 255))
+        local hex_str = "#" .. hr .. hg .. hb
+        local hex_tsz = render.get_text_size(hex_str)
+        render.add_text(
+            sw_pos:add(vector2(sw_size.x / 2 - hex_tsz.x / 2, sw_size.y / 2 - hex_tsz.y / 2)),
+            hex_str,
+            e.ValueHSV > 0.45 and color(0, 0, 0, 0.85) or color(1, 1, 1, 0.85))
     end
 
 
