@@ -918,10 +918,10 @@ hook.add("render", "auth_photon_render", function()
                                 render.add_rect_filled(swatch_pos, swatch_pos:add(swatch_size), color(element.Value.r, element.Value.g, element.Value.b, op), 5)
                                 render.add_rect(swatch_pos, swatch_pos:add(swatch_size), color(0,0,0,0.3*op), 5, 1)
 
-                                -- texture icon centered in button (left of swatch)
+                                                                -- texture icon centered in button (left of swatch)
                                 if not Library.BrushLoaded then Library:LoadBrushIcon() end
                                 if Library.BrushTexture then
-                                    local ico = vector2(44, 44)  -- Bigger icon for better visibility
+                                    local ico = vector2(195, 130)  -- Your image's actual size
                                     local ico_pos = vector2(
                                         icon_pos.x + (icon_size.x - ico.x) / 2,
                                         icon_pos.y + (icon_size.y - ico.y) / 2
