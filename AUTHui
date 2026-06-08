@@ -921,7 +921,7 @@ hook.add("render", "auth_photon_render", function()
                                                                 -- texture icon centered in button (left of swatch)
                                 if not Library.BrushLoaded then Library:LoadBrushIcon() end
                                 if Library.BrushTexture then
-                                    local ico = vector2(195, 130)  -- Your image's actual size
+                                    local ico = vector2(150, 130)  -- Your image's actual size
                                     local ico_pos = vector2(
                                         icon_pos.x + (icon_size.x - ico.x) / 2,
                                         icon_pos.y + (icon_size.y - ico.y) / 2
