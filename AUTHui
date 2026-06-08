@@ -837,7 +837,21 @@ function ColorPickerMethods:SetValue(val)
     if self.OnChangedFunc then self.OnChangedFunc(self.Value) end
     local h,s,v = rgb_to_hsv(val)
     self.Hue,self.Saturation,self.ValueHSV = h,s,v
-    self.Alpha = val.a
+    self.Alpha = val.a or 1
+end
+
+-- Initialize with theme color if no value set
+function ColorPickerMethods:InitWithTheme()
+    if not self.Value or (self.Value.r == 1 and self.Value.g == 1 and self.Value.b == 1) then
+        self:SetValue(Library.AccentColor)
+    end
+end
+-- ADD THIS INITIALIZATION FUNCTION for ColorPicker
+function ColorPickerMethods:InitWithTheme()
+    if not self.Value then
+        self:SetValue(Library.AccentColor)
+    end
+end
 end
 
 -- ─────────────────────────────────────────────
@@ -891,22 +905,22 @@ function Library:CreateWindow(config)
                 local el=CreateElement({Id=id,Type="Input",Text=info.Text,Value=info.Default or "",Placeholder=info.Placeholder or "",Callback=info.Callback,Height=44,Tooltip=info.Tooltip},InputMethods)
                 table.insert(self.Elements,el); Library.Options[id]=el; return el
             end
-            function groupbox:AddKeyPicker(id,info)
+                        function groupbox:AddKeyPicker(id,info)
                 local el=CreateElement({Id=id,Type="KeyPicker",Text=info.Text,Value=info.Default or "...",Callback=info.Callback,Picking=false,Height=44,Tooltip=info.Tooltip,Mode=info.Mode or "Hold",Active=false},KeyPickerMethods)
                 table.insert(self.Elements,el); Library.Options[id]=el; return el
             end
+            
             function groupbox:AddColorPicker(id,info)
-                local val=info.Default or color(1,1,1,1)
-                local h,s,v=rgb_to_hsv(val)
-                local el=CreateElement({Id=id,Type="ColorPicker",Text=info.Text,Value=val,Open=false,Callback=info.Callback,Height=24,Hue=h,Saturation=s,ValueHSV=v,Alpha=val.a,EnableAlpha=info.EnableAlpha,Tooltip=info.Tooltip,
+                -- Use theme accent color as default (184,184,212) instead of white
+                local default_color = info.Default or Library.AccentColor
+                local val = default_color
+                local h,s,v = rgb_to_hsv(val)
+                local el=CreateElement({Id=id,Type="ColorPicker",Text=info.Text,Value=val,Open=false,Callback=info.Callback,Height=24,Hue=h,Saturation=s,ValueHSV=v,Alpha=val.a or 1,EnableAlpha=info.EnableAlpha or false,Tooltip=info.Tooltip,
                     layout={pos=vector2(0,0),size=vector2(0,0),picker_pos=vector2(0,0),picker_size=vector2(0,0)}},ColorPickerMethods)
-                table.insert(self.Elements,el); Library.Options[id]=el; return el
-            end
-            function groupbox:AddDivider(height)
-                local el={Type="Divider",Height=height or 14}; table.insert(self.Elements,el); return el
-            end
-            function groupbox:AddLabel(text)
-                local el={Type="Label",Text=text,Height=22}; table.insert(self.Elements,el); return el
+                table.insert(self.Elements,el); Library.Options[id]=el; 
+                -- Ensure the color is set properly
+                if not info.Default then el:SetValue(Library.AccentColor) end
+                return el
             end
 
             table.insert(self.Groupboxes,groupbox); return groupbox
@@ -1294,30 +1308,47 @@ hook.add("render", "auth_photon_render", function()
                                     Library.RightClickMenu={obj=element, pos=mp, Alpha=0}
                                 end
 
-                                                       -- ColorPicker
+                                                                                   -- ColorPicker
                             elseif element.Type=="ColorPicker" then
                                 local box_size = vector2(20, 18)
                                 local box_pos  = ep:add(vector2(group_size.x-20-box_size.x, 4))
                                 element.layout.pos  = box_pos
                                 element.layout.size = box_size
-                                render.add_text(ep:add(vector2(0,3)), element.Text, apply_alpha(Library.SecondaryFontColor,op))
+                                render.add_text(ep:add(vector2(0,3)), element.Text, apply_alpha(Library.SecondaryFontColor, op))
                                 
                                 -- Draw checkerboard for transparency
                                 if element.EnableAlpha then 
                                     draw_checkerboard(box_pos:add(vector2(1,1)), box_size:subtract(vector2(2,2)), 4) 
                                 end
                                 
-                                -- Draw the color box with the ACTUAL selected color (not default red)
-                                local current_color = element.Value or color(1, 1, 1, 1)
-                                render.add_rect_filled(box_pos:add(vector2(1,1)), box_pos:add(box_size):subtract(vector2(1,1)), apply_alpha(current_color, op), 4)
+                                                            -- ColorPicker
+                            elseif element.Type=="ColorPicker" then
+                                local box_size = vector2(20, 18)
+                                local box_pos  = ep:add(vector2(group_size.x-20-box_size.x, 4))
+                                element.layout.pos  = box_pos
+                                element.layout.size = box_size
+                                render.add_text(ep:add(vector2(0,3)), element.Text, apply_alpha(Library.SecondaryFontColor, op))
+                                
+                                -- Draw checkerboard for transparency
+                                if element.EnableAlpha then 
+                                    draw_checkerboard(box_pos:add(vector2(1,1)), box_size:subtract(vector2(2,2)), 4) 
+                                end
+                                
+                                -- Draw the color box - uses selected color or theme accent
+                                local box_color = element.Value or Library.AccentColor
+                                render.add_rect_filled(box_pos:add(vector2(1,1)), box_pos:add(box_size):subtract(vector2(1,1)), apply_alpha(box_color, op), 4)
                                 render.add_rect(box_pos, box_pos:add(box_size), apply_alpha(Library.OutlineColor, op), 4, 1)
                                 
-                                -- Draw small brush icon inside the box to indicate it's a color picker
+                                -- Draw brush icon inside the box (theme colored)
                                 local bc = box_pos:add(vector2(box_size.x/2, box_size.y/2))
-                                render.add_line(bc:add(vector2(-3, -2)), bc:add(vector2(2, 4)), color(1, 1, 1, 0.6 * op), 1)
-                                render.add_circle_filled(bc:add(vector2(-2, -1)), 1.5, color(1, 0.5, 0, 0.8 * op))
+                                -- Brush handle
+                                render.add_line(bc:add(vector2(-3, -2)), bc:add(vector2(2, 4)), apply_alpha(Library.FontColor, 0.7 * op), 1)
+                                -- Brush tip / paint drop (uses theme accent)
+                                render.add_circle_filled(bc:add(vector2(-2, -1)), 1.5, apply_alpha(Library.AccentColor, 0.9 * op))
+                                -- Brush bristles
+                                render.add_line(bc:add(vector2(1, 3)), bc:add(vector2(3, 4)), apply_alpha(Library.FontColor, 0.5 * op), 0.8)
                                 
-                                -- Click to open color picker
+                                -- Click to open color picker panel
                                 if not Library.DraggingWindow and mpressed and is_mouse_in_rect(box_pos, box_size) and can_interact then
                                     element.Open = not element.Open
                                     if element.Open then
