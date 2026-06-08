@@ -891,12 +891,16 @@ hook.add("render", "auth_photon_render", function()
 
                             -- ColorPicker
                             elseif element.Type == "ColorPicker" then
-                                -- Small square brush button only
-                                local btn_dim = 32
-                                local icon_size = vector2(btn_dim, btn_dim)
+                                -- Draw brush image at natural aspect ratio (195x130), fitted to groupbox width
+                                local img_aspect = 195 / 130
+                                local btn_w = group_size.x - 20
+                                local btn_h = math.floor(btn_w / img_aspect)
+                                local icon_size = vector2(btn_w, btn_h)
                                 local icon_pos = ep
                                 element.layout.pos = icon_pos
                                 element.layout.size = icon_size
+                                -- keep element height in sync so layout doesn't overlap next element
+                                element.Height = btn_h + 6
 
                                 local is_hover = is_mouse_in_rect(icon_pos, icon_size)
                                 local is_open = element.Open
@@ -909,7 +913,7 @@ hook.add("render", "auth_photon_render", function()
                                     render.add_texture(Library.BrushTexture, icon_pos, icon_pos:add(icon_size), brush_alpha)
                                     -- small color dot in bottom-right corner showing current color
                                     local dot_r = 5
-                                    local dot_center = icon_pos:add(vector2(icon_size.x - dot_r - 2, icon_size.y - dot_r - 2))
+                                    local dot_center = icon_pos:add(vector2(icon_size.x - dot_r - 3, icon_size.y - dot_r - 3))
                                     render.add_circle_filled(dot_center, dot_r, color(element.Value.r, element.Value.g, element.Value.b, op))
                                     render.add_circle(dot_center, dot_r, color(0, 0, 0, 0.4 * op), 1)
                                 else
