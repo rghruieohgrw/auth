@@ -1006,27 +1006,41 @@ hook.add("render", "auth_photon_render", function()
                                     Library.RightClickMenu={obj=element, pos=mp, Alpha=0}
                                 end
 
-                            -- FIXED: ColorPicker box - uses theme accent color
+                            -- ColorPicker (Brush Icon Only - No Color Box)
                             elseif element.Type=="ColorPicker" then
-                                local box_size = vector2(18,14)
-                                local box_pos = ep:add(vector2(group_size.x-20-box_size.x, 4))
-                                element.layout.pos = box_pos
-                                element.layout.size = box_size
-                                render.add_text(ep:add(vector2(0,3)), element.Text, apply_alpha(Library.SecondaryFontColor, op))
-                                if element.EnableAlpha then 
-                                    draw_checkerboard(box_pos:add(vector2(1,1)), box_size:subtract(vector2(2,2)), 4) 
-                                end
-                                -- Use the actual color value (defaults to theme accent)
-                                local display_color = element.Value or Library.AccentColor
-                                render.add_rect_filled(box_pos:add(vector2(1,1)), box_pos:add(box_size):subtract(vector2(1,1)), apply_alpha(display_color, op), 4)
-                                render.add_rect(box_pos, box_pos:add(box_size), apply_alpha(Library.OutlineColor, op), 4, 1)
+                                local icon_size = vector2(22, 22)
+                                local icon_pos = ep:add(vector2(group_size.x-20-icon_size.x, 2))
+                                element.layout.pos = icon_pos
+                                element.layout.size = icon_size
                                 
-                                -- Tiny brush icon inside the color box
-                                local bc = box_pos:add(vector2(box_size.x/2, box_size.y/2))
-                                render.add_line(bc:add(vector2(-3, -2)), bc:add(vector2(2, 4)), apply_alpha(Library.FontColor, 0.6 * op), 1)
-                                render.add_circle_filled(bc:add(vector2(-2, -1)), 1.5, apply_alpha(Library.AccentColor, 0.8 * op))
+                                -- Draw the label
+                                render.add_text(ep:add(vector2(0,5)), element.Text, apply_alpha(Library.SecondaryFontColor, op))
                                 
-                                if not Library.DraggingWindow and mpressed and is_mouse_in_rect(box_pos, box_size) and can_interact then
+                                -- Draw brush button background
+                                local is_hover = is_mouse_in_rect(icon_pos, icon_size)
+                                local bg_color = is_hover and color(0.35, 0.35, 0.4, op) or color(0.2, 0.2, 0.25, op)
+                                render.add_rect_filled(icon_pos, icon_pos:add(icon_size), bg_color, 6)
+                                render.add_rect(icon_pos, icon_pos:add(icon_size), apply_alpha(Library.OutlineColor, op), 6, 1)
+                                
+                                -- Draw brush icon (clean and visible)
+                                local center = icon_pos:add(vector2(icon_size.x/2, icon_size.y/2))
+                                
+                                -- Brush handle (angled line)
+                                render.add_line(center:add(vector2(-6, -4)), center:add(vector2(5, 8)), apply_alpha(Library.FontColor, 0.9 * op), 2)
+                                
+                                -- Brush bristles (small lines at tip)
+                                render.add_line(center:add(vector2(4, 7)), center:add(vector2(8, 8)), apply_alpha(Library.FontColor, 0.7 * op), 1.5)
+                                render.add_line(center:add(vector2(4, 6)), center:add(vector2(9, 7)), apply_alpha(Library.FontColor, 0.7 * op), 1.5)
+                                render.add_line(center:add(vector2(3, 5)), center:add(vector2(8, 6)), apply_alpha(Library.FontColor, 0.7 * op), 1.5)
+                                
+                                -- Paint drop on the brush
+                                render.add_circle_filled(center:add(vector2(-5, -3)), 2.5, apply_alpha(Library.AccentColor, 0.9 * op))
+                                
+                                -- Brush tip highlight
+                                render.add_circle_filled(center:add(vector2(2, 7)), 1.5, apply_alpha(Library.FontColor, 0.8 * op))
+                                
+                                -- Click to open color picker panel
+                                if not Library.DraggingWindow and mpressed and is_mouse_in_rect(icon_pos, icon_size) and can_interact then
                                     element.Open = not element.Open
                                     if element.Open then
                                         Library.ActiveColorPicker = {obj=element, layout=element.layout}
