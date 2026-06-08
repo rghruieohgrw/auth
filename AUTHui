@@ -474,37 +474,48 @@ local function draw_shadow(pos, size, radius, alpha_mult)
     end
 end
 
--- ========== LOAD BRUSH ICON FROM URL ==========
+-- ========== LOAD ICONS FROM URL ==========
 Library.BrushTexture = nil
-Library.BrushLoaded = false
+Library.ColorIconTexture = nil
+Library.IconsLoaded = false
 
-function Library:LoadBrushIcon()
-    if self.BrushLoaded then return self.BrushTexture end
+function Library:LoadIcons()
+    if self.IconsLoaded then return end
     
-    local icon_path = "icons/brush.png"
-    if file.exists(icon_path) then
-        local tex = render.load_texture(icon_path)
-        if tex then 
-            self.BrushTexture = tex.id
-            self.BrushLoaded = true
-            return self.BrushTexture
-        end
+    -- Brush icon
+    local brush_path = "icons/brush.png"
+    if file.exists(brush_path) then
+        local tex = render.load_texture(brush_path)
+        if tex then self.BrushTexture = tex.id end
+    else
+        http.get("https://raw.githubusercontent.com/rghruieohgrw/visuals/main/visuals.png", function(body, status)
+            if status == 200 then
+                if not file.exists("icons/") then file.write("icons/.keep", "") end
+                file.write(brush_path, body, "binary")
+                local tex = render.load_texture(brush_path)
+                if tex then self.BrushTexture = tex.id end
+            end
+        end)
     end
     
-    http.get("https://raw.githubusercontent.com/rghruieohgrw/visuals/main/color.png", function(body, status)
-        if status == 200 then
-            if not file.exists("icons/") then file.write("icons/.keep", "") end
-            file.write(icon_path, body, "binary")
-            local tex = render.load_texture(icon_path)
-            if tex then 
-                self.BrushTexture = tex.id
-                self.BrushLoaded = true
+    -- Color palette icon (optional - for a different button)
+    local color_path = "icons/color.png"
+    if file.exists(color_path) then
+        local tex = render.load_texture(color_path)
+        if tex then self.ColorIconTexture = tex.id end
+    else
+        http.get("https://raw.githubusercontent.com/rghruieohgrw/visuals/refs/heads/main/color.png", function(body, status)
+            if status == 200 then
+                if not file.exists("icons/") then file.write("icons/.keep", "") end
+                file.write(color_path, body, "binary")
+                local tex = render.load_texture(color_path)
+                if tex then self.ColorIconTexture = tex.id end
             end
-        end
-    end)
-    return nil
+        end)
+    end
+    
+    self.IconsLoaded = true
 end
-
 -- ========== ELEMENT METHODS ==========
 local ElementMethods = {}
 function ElementMethods:OnChanged(func) self.OnChangedFunc = func; return self end
@@ -1048,47 +1059,43 @@ hook.add("render", "auth_photon_render", function()
                                     Library.RightClickMenu={obj=element, pos=mp, Alpha=0}
                                 end
 
-                            -- ColorPicker (Brush Icon Only - No Color Box)
-                            elseif element.Type=="ColorPicker" then
-                                local icon_size = vector2(22, 22)
-                                local icon_pos = ep:add(vector2(group_size.x-20-icon_size.x, 2))
-                                element.layout.pos = icon_pos
-                                element.layout.size = icon_size
-                                
-                                -- Draw the label
-                                render.add_text(ep:add(vector2(0,5)), element.Text, apply_alpha(Library.SecondaryFontColor, op))
-                                
-                                -- Draw brush button background
-                                local is_hover = is_mouse_in_rect(icon_pos, icon_size)
-                                local bg_color = is_hover and color(0.35, 0.35, 0.4, op) or color(0.2, 0.2, 0.25, op)
-                                render.add_rect_filled(icon_pos, icon_pos:add(icon_size), bg_color, 6)
-                                render.add_rect(icon_pos, icon_pos:add(icon_size), apply_alpha(Library.OutlineColor, op), 6, 1)
-                                
-                                -- Load and draw the brush icon from URL
-                                if not Library.BrushLoaded then Library:LoadBrushIcon() end
-                                
-                                if Library.BrushTexture then
-                                    -- Use the downloaded image
-                                    render.add_texture(Library.BrushTexture, icon_pos:add(vector2(3,3)), icon_pos:add(icon_size):subtract(vector2(3,3)), 0.9 * op)
-                                else
-                                    -- Fallback: draw brush shape
-                                    local center = icon_pos:add(vector2(icon_size.x/2, icon_size.y/2))
-                                    render.add_line(center:add(vector2(-6, -4)), center:add(vector2(5, 8)), apply_alpha(Library.FontColor, 0.9 * op), 2)
-                                    render.add_line(center:add(vector2(4, 7)), center:add(vector2(8, 8)), apply_alpha(Library.FontColor, 0.7 * op), 1.5)
-                                    render.add_line(center:add(vector2(4, 6)), center:add(vector2(9, 7)), apply_alpha(Library.FontColor, 0.7 * op), 1.5)
-                                    render.add_circle_filled(center:add(vector2(-5, -3)), 2.5, apply_alpha(Library.AccentColor, 0.9 * op))
-                                end
-                                
-                                -- Click to open color picker panel
-                                if not Library.DraggingWindow and mpressed and is_mouse_in_rect(icon_pos, icon_size) and can_interact then
-                                    element.Open = not element.Open
-                                    if element.Open then
-                                        Library.ActiveColorPicker = {obj=element, layout=element.layout}
-                                    else
-                                        Library.ActiveColorPicker = nil
-                                    end
-                                end
-
+-- ColorPicker (Brush Icon Only)
+elseif element.Type=="ColorPicker" then
+    local icon_size = vector2(22, 22)
+    local icon_pos = ep:add(vector2(group_size.x-20-icon_size.x, 2))
+    element.layout.pos = icon_pos
+    element.layout.size = icon_size
+    
+    render.add_text(ep:add(vector2(0,5)), element.Text, apply_alpha(Library.SecondaryFontColor, op))
+    
+    -- Load icons if not loaded
+    if not Library.IconsLoaded then Library:LoadIcons() end
+    
+    -- Draw button background
+    local is_hover = is_mouse_in_rect(icon_pos, icon_size)
+    local bg_color = is_hover and color(0.35, 0.35, 0.4, op) or color(0.2, 0.2, 0.25, op)
+    render.add_rect_filled(icon_pos, icon_pos:add(icon_size), bg_color, 6)
+    render.add_rect(icon_pos, icon_pos:add(icon_size), apply_alpha(Library.OutlineColor, op), 6, 1)
+    
+    -- Draw the brush icon (from URL)
+    if Library.BrushTexture then
+        render.add_texture(Library.BrushTexture, icon_pos:add(vector2(3,3)), icon_pos:add(icon_size):subtract(vector2(3,3)), 0.9 * op)
+    else
+        -- Fallback drawn brush
+        local center = icon_pos:add(vector2(icon_size.x/2, icon_size.y/2))
+        render.add_line(center:add(vector2(-5, -3)), center:add(vector2(4, 7)), apply_alpha(Library.FontColor, 0.9 * op), 2)
+        render.add_circle_filled(center:add(vector2(-4, -2)), 2, apply_alpha(Library.AccentColor, 0.9 * op))
+    end
+    
+    -- Click to open color picker
+    if not Library.DraggingWindow and mpressed and is_mouse_in_rect(icon_pos, icon_size) and can_interact then
+        element.Open = not element.Open
+        if element.Open then
+            Library.ActiveColorPicker = {obj=element, layout=element.layout}
+        else
+            Library.ActiveColorPicker = nil
+        end
+    end
                             -- Divider
                             elseif element.Type=="Divider" then
                                 local dy = ep.y + element.Height/2
