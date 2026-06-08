@@ -921,10 +921,11 @@ hook.add("render", "auth_photon_render", function()
                                 -- texture icon centered in button (left of swatch)
                                 if not Library.BrushLoaded then Library:LoadBrushIcon() end
                                 if Library.BrushTexture then
-                                    local ico = vector2(20, 20)
+                                    local ico = vector2(28, 28)  -- Bigger icon for better visibility
                                     local ico_pos = vector2(
-                                        icon_pos.x + icon_size.x/2 - ico.x/2 - swatch_w/2,
-                                        icon_pos.y + icon_size.y/2 - ico.y/2)
+                                        icon_pos.x + (icon_size.x - ico.x) / 2,
+                                        icon_pos.y + (icon_size.y - ico.y) / 2
+                                    )
                                     render.add_texture(Library.BrushTexture, ico_pos, ico_pos:add(ico), op)
                                 end
 
@@ -954,7 +955,6 @@ hook.add("render", "auth_photon_render", function()
         end
         ::continue_window::
     end
-
     -- ========== DROPDOWN LIST ==========
     if Library.OpenedDropdown then
         local e = Library.OpenedDropdown
