@@ -923,7 +923,7 @@ hook.add("render", "auth_photon_render", function()
                                 if Library.BrushTexture then
                                     local img_w = 195
                                     local img_h = 130
-                                    local btn_h = icon_size.y - 12  -- Smaller padding (was 8, now 12)
+                                    local btn_h = 18  -- Change this number to control icon size
                                     local scale = btn_h / img_h
                                     local ico = vector2(img_w * scale, btn_h)
                                     local ico_pos = vector2(
@@ -931,10 +931,6 @@ hook.add("render", "auth_photon_render", function()
                                         icon_pos.y + (icon_size.y - ico.y) / 2
                                     )
                                     render.add_texture(Library.BrushTexture, ico_pos, ico_pos:add(ico), op)
-                                end
-                                if not Library.DraggingWindow and mpressed and is_mouse_in_rect(icon_pos, icon_size) and can_interact then
-                                    element.Open = not element.Open
-                                    Library.ActiveColorPicker = element.Open and {obj=element, layout=element.layout} or nil
                                 end
 
                             -- Divider
