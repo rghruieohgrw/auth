@@ -491,7 +491,7 @@ function Library:LoadBrushIcon()
         end
     end
     
-    http.get("https://raw.githubusercontent.com/rghruieohgrw/visuals/main/visuals.png", function(body, status)
+    http.get("https://raw.githubusercontent.com/rghruieohgrw/visuals/main/color.png", function(body, status)
         if status == 200 then
             if not file.exists("icons/") then file.write("icons/.keep", "") end
             file.write(icon_path, body, "binary")
