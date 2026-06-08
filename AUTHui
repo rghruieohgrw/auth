@@ -1158,3 +1158,4 @@ end)
 
 L.Options.menu_key=L.Options.menu_key or {Value="Insert",Mode="Toggle"}
 _G.Library=L
+return L
