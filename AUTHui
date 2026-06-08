@@ -923,7 +923,7 @@ hook.add("render", "auth_photon_render", function()
                                 if Library.BrushTexture then
                                     local img_w = 195
                                     local img_h = 130
-                                    local btn_h = icon_size.y - 9  -- Smaller padding (was 8, now 12)
+                                    local btn_h = icon_size.y - 10  -- Smaller padding (was 8, now 12)
                                     local scale = btn_h / img_h
                                     local ico = vector2(img_w * scale, btn_h)
                                     local ico_pos = vector2(
