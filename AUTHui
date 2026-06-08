@@ -20,7 +20,7 @@ local L = {
     RiskColor          = color(1,0.24,0.24,1),
     ShadowStrength     = 0.5,
     Notifications      = {},
-    Watermark          = ( Text="Photon ("..._localname..")", Pos=vector2(15,15), Visible=true),
+    Watermark          = {Text="Photon ("..._localname..")", Pos=vector2(15,15), Visible=true},
     ActiveSlider=nil, DraggingWindow=nil, DragOffset=vector2(0,0),
     DraggingWatermark=false,
     Hue=0, CurrentRainbowColor=color(1,0,0,1),
@@ -1158,4 +1158,3 @@ end)
 
 L.Options.menu_key=L.Options.menu_key or {Value="Insert",Mode="Toggle"}
 _G.Library=L
-return L
