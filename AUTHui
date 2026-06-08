@@ -1,5 +1,3 @@
--- AUTHui v3 - Photon UI Library
--- Optimized: no duplicate renders, cached sizes, modal cfg name input, pfp, smaller color icon
 
 local _players    = game:get_service("Players")
 local _lp         = _players and _players.local_player
