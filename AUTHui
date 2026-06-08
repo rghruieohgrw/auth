@@ -21,6 +21,7 @@ local Library = {
     ActiveSlider = nil,
     DraggingWindow = nil,
     DragOffset = vector2(0, 0),
+    DragTargetPos = nil,
     DraggingWatermark = false,
     Hue = 0,
     CurrentRainbowColor = color(1, 0, 0, 1),
@@ -323,13 +324,13 @@ local function draw_checkerboard(pos, size, sq)
 end
 
 local function draw_shadow(pos, size, radius, alpha_mult)
-    local layers = 8
+    local layers = 14
     for i = 1, layers do
-        local spread = i * 3
-        local a = (1 - i / layers) * 0.18 * (alpha_mult or 1)
-        local sp = pos:add(vector2(-spread, -spread + spread * 0.5))
+        local spread = i * 4
+        local a = (1 - i / layers) ^ 1.6 * 0.32 * (alpha_mult or 1)
+        local sp = pos:add(vector2(-spread, -spread + spread * 0.4))
         local ss = size:add(vector2(spread * 2, spread * 2))
-        render.add_rect_filled(sp, sp:add(ss), color(0, 0, 0, a), radius + i)
+        render.add_rect_filled(sp, sp:add(ss), color(0, 0, 0, a), radius + i * 1.2)
     end
 end
 
@@ -467,7 +468,7 @@ function Library:CreateWindow(config)
             end
 
             function groupbox:AddSlider(id, info)
-                local el = CreateElement({Id=id,Type="Slider",Text=info.Text,Value=info.Default or 0,Min=info.Min or 0,Max=info.Max or 100,Rounding=info.Rounding or 0,Suffix=info.Suffix or "",Callback=info.Callback,Height=50,Tooltip=info.Tooltip,ThumbAnim=info.Default and (info.Default-(info.Min or 0))/((info.Max or 100)-(info.Min or 0)) or 0,BubbleAlpha=0}, SliderMethods)
+                local el = CreateElement({Id=id,Type="Slider",Text=info.Text,Value=info.Default or 0,Min=info.Min or 0,Max=info.Max or 100,Rounding=info.Rounding or 0,Suffix=info.Suffix or "",Callback=info.Callback,Height=50,Tooltip=info.Tooltip,ThumbAnim=info.Default and (info.Default-(info.Min or 0))/((info.Max or 100)-(info.Min or 0)) or 0,FillAnim=info.Default and (info.Default-(info.Min or 0))/((info.Max or 100)-(info.Min or 0)) or 0,BubbleAlpha=0}, SliderMethods)
                 table.insert(self.Elements, el); Library.Options[id] = el; return el
             end
 
@@ -497,7 +498,7 @@ function Library:CreateWindow(config)
                 local h,s,v = rgb_to_hsv(default_color)
                 local el = CreateElement({
                     Id=id, Type="ColorPicker", Text=info.Text, Value=default_color,
-                    Open=false, Callback=info.Callback, Height=36,
+                    Open=false, Callback=info.Callback, Height=76,
                     Hue=h, Saturation=s, ValueHSV=v, Alpha=default_color.a or 1,
                     EnableAlpha=info.EnableAlpha or false, Tooltip=info.Tooltip,
                     layout={pos=vector2(0,0), size=vector2(0,0), picker_pos=vector2(0,0), picker_size=vector2(0,0)}
@@ -624,8 +625,15 @@ hook.add("render", "auth_photon_render", function()
 
     -- window drag
     if Library.DraggingWindow then
-        if mdown then Library.DraggingWindow.Pos = mp:subtract(Library.DragOffset)
-        else Library.DraggingWindow = nil end
+        if mdown then
+            local target = mp:subtract(Library.DragOffset)
+            Library.DragTargetPos = target
+            local w = Library.DraggingWindow
+            w.Pos = vector2(
+                w.Pos.x + (target.x - w.Pos.x) * 0.22,
+                w.Pos.y + (target.y - w.Pos.y) * 0.22
+            )
+        else Library.DraggingWindow = nil; Library.DragTargetPos = nil end
     end
 
     -- slider drag
@@ -723,8 +731,16 @@ hook.add("render", "auth_photon_render", function()
                         local group_pos = content_area:add(vector2(side_off, y_off))
 
                         local current_y = 32
-                        for _,e in ipairs(groupbox.Elements) do current_y = current_y + e.Height end
-                        local group_size = vector2(window.Size.x/2-20, current_y)
+                        local group_content_w = window.Size.x/2-20
+                        for _,e in ipairs(groupbox.Elements) do
+                            -- pre-compute ColorPicker height from image aspect so group_size is accurate
+                            if e.Type == "ColorPicker" then
+                                local btn_w = group_content_w - 20
+                                e.Height = math.floor(btn_w * 130 / 195) + 6
+                            end
+                            current_y = current_y + e.Height
+                        end
+                        local group_size = vector2(group_content_w, current_y)
 
                         draw_shadow(group_pos, group_size, 8, op * 0.5)
                         render.add_rect_filled(group_pos, group_pos:add(group_size), apply_alpha(Library.MainColor, op), 8)
@@ -766,7 +782,9 @@ hook.add("render", "auth_photon_render", function()
                             -- Slider
                             elseif element.Type == "Slider" then
                                 local ratio = (element.Value - element.Min) / (element.Max - element.Min)
-                                element.ThumbAnim = element.ThumbAnim + (ratio - element.ThumbAnim) * 0.08
+                                element.ThumbAnim = element.ThumbAnim + (ratio - element.ThumbAnim) * 0.18
+                                -- fill trails behind thumb for a satisfying elastic feel
+                                element.FillAnim = element.FillAnim + (element.ThumbAnim - element.FillAnim) * 0.09
                                 local s_pos = ep:add(vector2(0, 22))
                                 local s_size = vector2(group_size.x-20, 14)
                                 local thumb_x = s_pos.x + s_size.x * element.ThumbAnim
@@ -776,8 +794,8 @@ hook.add("render", "auth_photon_render", function()
                                 render.add_text(ep, element.Text, apply_alpha(Library.SecondaryFontColor, op))
                                 render.add_rect_filled(s_pos, s_pos:add(s_size), apply_alpha(Library.BackgroundColor, op), 7)
                                 render.add_rect(s_pos, s_pos:add(s_size), apply_alpha(Library.OutlineColor, op), 7, 1)
-                                if element.ThumbAnim > 0.001 then
-                                    local fill_w = math.max(0, s_size.x * element.ThumbAnim - 2)
+                                if element.FillAnim > 0.001 then
+                                    local fill_w = math.max(0, s_size.x * element.FillAnim - 2)
                                     render.add_rect_filled(s_pos:add(vector2(2,2)), s_pos:add(vector2(2+fill_w, s_size.y-2)), apply_alpha(accent, op), 5)
                                 end
                                 local thumb_pos = vector2(thumb_x-4, s_pos.y-2)
@@ -891,16 +909,11 @@ hook.add("render", "auth_photon_render", function()
 
                             -- ColorPicker
                             elseif element.Type == "ColorPicker" then
-                                -- Draw brush image at natural aspect ratio (195x130), fitted to groupbox width
-                                local img_aspect = 195 / 130
-                                local btn_w = group_size.x - 20
-                                local btn_h = math.floor(btn_w / img_aspect)
-                                local icon_size = vector2(btn_w, btn_h)
+                                -- element.Height is pre-computed above to match 195:130 image aspect
+                                local icon_size = vector2(group_size.x - 20, element.Height - 6)
                                 local icon_pos = ep
                                 element.layout.pos = icon_pos
                                 element.layout.size = icon_size
-                                -- keep element height in sync so layout doesn't overlap next element
-                                element.Height = btn_h + 6
 
                                 local is_hover = is_mouse_in_rect(icon_pos, icon_size)
                                 local is_open = element.Open
