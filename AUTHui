@@ -333,21 +333,29 @@ local function draw_shadow(pos, size, radius, alpha_mult)
     end
 end
 
--- ========== BRUSH ICON ==========
 function Library:LoadBrushIcon()
     if self.BrushLoaded then return end
     self.BrushLoaded = true
     local path = "icons/brush.png"
     if file.exists(path) then
         local tex = render.load_texture(path)
-        if tex then self.BrushTexture = tex.id end
+        if tex then 
+            self.BrushTexture = tex.id
+            -- Force texture to be treated as scalable
+            self.BrushWidth = 195
+            self.BrushHeight = 130
+        end
     else
         http.get("https://raw.githubusercontent.com/rghruieohgrw/visuals/refs/heads/main/color.png", function(body, status)
             if status == 200 then
                 if not file.exists("icons/") then file.write("icons/.keep", "") end
                 file.write(path, body, "binary")
                 local tex = render.load_texture(path)
-                if tex then self.BrushTexture = tex.id end
+                if tex then 
+                    self.BrushTexture = tex.id
+                    self.BrushWidth = 195
+                    self.BrushHeight = 130
+                end
             end
         end)
     end
