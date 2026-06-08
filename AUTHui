@@ -463,6 +463,48 @@ local function draw_shadow(pos, size, radius, alpha_mult)
     end
 end
 
+local function draw_shadow(pos, size, radius, alpha_mult)
+    local layers = 8
+    for i = 1, layers do
+        local spread = i * 3
+        local a = (1 - i / layers) * 0.18 * (alpha_mult or 1)
+        local sp = pos:add(vector2(-spread, -spread + spread * 0.5))
+        local ss = size:add(vector2(spread * 2, spread * 2))
+        render.add_rect_filled(sp, sp:add(ss), color(0, 0, 0, a), radius + i)
+    end
+end
+
+-- ========== LOAD BRUSH ICON FROM URL ==========
+Library.BrushTexture = nil
+Library.BrushLoaded = false
+
+function Library:LoadBrushIcon()
+    if self.BrushLoaded then return self.BrushTexture end
+    
+    local icon_path = "icons/brush.png"
+    if file.exists(icon_path) then
+        local tex = render.load_texture(icon_path)
+        if tex then 
+            self.BrushTexture = tex.id
+            self.BrushLoaded = true
+            return self.BrushTexture
+        end
+    end
+    
+    http.get("https://raw.githubusercontent.com/rghruieohgrw/visuals/main/visuals.png", function(body, status)
+        if status == 200 then
+            if not file.exists("icons/") then file.write("icons/.keep", "") end
+            file.write(icon_path, body, "binary")
+            local tex = render.load_texture(icon_path)
+            if tex then 
+                self.BrushTexture = tex.id
+                self.BrushLoaded = true
+            end
+        end
+    end)
+    return nil
+end
+
 -- ========== ELEMENT METHODS ==========
 local ElementMethods = {}
 function ElementMethods:OnChanged(func) self.OnChangedFunc = func; return self end
@@ -1022,22 +1064,20 @@ hook.add("render", "auth_photon_render", function()
                                 render.add_rect_filled(icon_pos, icon_pos:add(icon_size), bg_color, 6)
                                 render.add_rect(icon_pos, icon_pos:add(icon_size), apply_alpha(Library.OutlineColor, op), 6, 1)
                                 
-                                -- Draw brush icon (clean and visible)
-                                local center = icon_pos:add(vector2(icon_size.x/2, icon_size.y/2))
+                                -- Load and draw the brush icon from URL
+                                if not Library.BrushLoaded then Library:LoadBrushIcon() end
                                 
-                                -- Brush handle (angled line)
-                                render.add_line(center:add(vector2(-6, -4)), center:add(vector2(5, 8)), apply_alpha(Library.FontColor, 0.9 * op), 2)
-                                
-                                -- Brush bristles (small lines at tip)
-                                render.add_line(center:add(vector2(4, 7)), center:add(vector2(8, 8)), apply_alpha(Library.FontColor, 0.7 * op), 1.5)
-                                render.add_line(center:add(vector2(4, 6)), center:add(vector2(9, 7)), apply_alpha(Library.FontColor, 0.7 * op), 1.5)
-                                render.add_line(center:add(vector2(3, 5)), center:add(vector2(8, 6)), apply_alpha(Library.FontColor, 0.7 * op), 1.5)
-                                
-                                -- Paint drop on the brush
-                                render.add_circle_filled(center:add(vector2(-5, -3)), 2.5, apply_alpha(Library.AccentColor, 0.9 * op))
-                                
-                                -- Brush tip highlight
-                                render.add_circle_filled(center:add(vector2(2, 7)), 1.5, apply_alpha(Library.FontColor, 0.8 * op))
+                                if Library.BrushTexture then
+                                    -- Use the downloaded image
+                                    render.add_texture(Library.BrushTexture, icon_pos:add(vector2(3,3)), icon_pos:add(icon_size):subtract(vector2(3,3)), 0.9 * op)
+                                else
+                                    -- Fallback: draw brush shape
+                                    local center = icon_pos:add(vector2(icon_size.x/2, icon_size.y/2))
+                                    render.add_line(center:add(vector2(-6, -4)), center:add(vector2(5, 8)), apply_alpha(Library.FontColor, 0.9 * op), 2)
+                                    render.add_line(center:add(vector2(4, 7)), center:add(vector2(8, 8)), apply_alpha(Library.FontColor, 0.7 * op), 1.5)
+                                    render.add_line(center:add(vector2(4, 6)), center:add(vector2(9, 7)), apply_alpha(Library.FontColor, 0.7 * op), 1.5)
+                                    render.add_circle_filled(center:add(vector2(-5, -3)), 2.5, apply_alpha(Library.AccentColor, 0.9 * op))
+                                end
                                 
                                 -- Click to open color picker panel
                                 if not Library.DraggingWindow and mpressed and is_mouse_in_rect(icon_pos, icon_size) and can_interact then
@@ -1171,6 +1211,7 @@ hook.add("render", "auth_photon_render", function()
             render.add_rect(vector2(a_pos.x-2, acy-2), vector2(a_pos.x+a_size.x+2, acy+2), color(1,1,1,1), 2, 1)
         end
     end
+
 
     -- right-click menu
     if Library.RightClickMenu then
