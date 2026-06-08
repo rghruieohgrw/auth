@@ -1058,17 +1058,20 @@ hook.add("render", "auth_photon_render", function()
                                 render.add_rect(icon_pos, icon_pos:add(icon_size), apply_alpha(Library.OutlineColor, op), 6, 1)
                                 
                                 -- Load and draw the brush icon from URL
-                                local c  = icon_pos:add(vector2(icon_size.x / 2, icon_size.y / 2))
-local fc = apply_alpha(Library.FontColor, op)
-local ac = apply_alpha(Library.AccentColor, op)
-local sc = apply_alpha(Library.SecondaryFontColor, op)
--- handle
-render.add_line(c:add(vector2(-7, -7)), c:add(vector2(3, 3)), fc, 2)
--- ferrule band
-render.add_line(c:add(vector2(2, 2)), c:add(vector2(4, 4)), sc, 3)
--- bristle tip
-render.add_circle_filled(c:add(vector2(6, 6)), 4, ac)
-render.add_circle(c:add(vector2(6, 6)), 4, apply_alpha(color(0, 0, 0, 1), op * 0.3), 1)
+                                if not Library.BrushLoaded then Library:LoadBrushIcon() end
+if Library.BrushTexture then
+    local draw_size = vector2(18, 18)
+    local draw_pos = icon_pos:add(vector2(
+        (icon_size.x - draw_size.x) / 2,
+        (icon_size.y - draw_size.y) / 2
+    ))
+    render.add_texture(Library.BrushTexture, draw_pos, draw_pos:add(draw_size), 0.9 * op)
+else
+    local c  = icon_pos:add(vector2(icon_size.x / 2, icon_size.y / 2))
+    render.add_line(c:add(vector2(-7, -7)), c:add(vector2(3, 3)), apply_alpha(Library.FontColor, op), 2)
+    render.add_line(c:add(vector2(2, 2)), c:add(vector2(4, 4)), apply_alpha(Library.SecondaryFontColor, op), 3)
+    render.add_circle_filled(c:add(vector2(6, 6)), 4, apply_alpha(Library.AccentColor, op))
+end
                                 
                                 -- Click to open color picker panel
                                 if not Library.DraggingWindow and mpressed and is_mouse_in_rect(icon_pos, icon_size) and can_interact then
