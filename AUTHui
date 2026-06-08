@@ -1294,32 +1294,30 @@ hook.add("render", "auth_photon_render", function()
                                     Library.RightClickMenu={obj=element, pos=mp, Alpha=0}
                                 end
 
-                            -- ColorPicker
+                                                       -- ColorPicker
                             elseif element.Type=="ColorPicker" then
-                                local box_size = vector2(24, 18)  -- Slightly larger
-                                local box_pos  = ep:add(vector2(group_size.x-20-box_size.x, 3))
+                                local box_size = vector2(20, 18)
+                                local box_pos  = ep:add(vector2(group_size.x-20-box_size.x, 4))
                                 element.layout.pos  = box_pos
                                 element.layout.size = box_size
+                                render.add_text(ep:add(vector2(0,3)), element.Text, apply_alpha(Library.SecondaryFontColor,op))
                                 
-                                -- Draw label
-                                render.add_text(ep:add(vector2(0,4)), element.Text, apply_alpha(Library.SecondaryFontColor, op))
-                                
-                                -- Draw checkerboard background for transparency
+                                -- Draw checkerboard for transparency
                                 if element.EnableAlpha then 
-                                    draw_checkerboard(box_pos:add(vector2(2,2)), box_size:subtract(vector2(4,4)), 4) 
+                                    draw_checkerboard(box_pos:add(vector2(1,1)), box_size:subtract(vector2(2,2)), 4) 
                                 end
                                 
-                                -- Draw color preview
-                                render.add_rect_filled(box_pos:add(vector2(2,2)), box_pos:add(box_size):subtract(vector2(2,2)), apply_alpha(element.Value, op), 4)
+                                -- Draw the color box with the ACTUAL selected color (not default red)
+                                local current_color = element.Value or color(1, 1, 1, 1)
+                                render.add_rect_filled(box_pos:add(vector2(1,1)), box_pos:add(box_size):subtract(vector2(1,1)), apply_alpha(current_color, op), 4)
                                 render.add_rect(box_pos, box_pos:add(box_size), apply_alpha(Library.OutlineColor, op), 4, 1)
                                 
-                                -- Draw small brush icon inside the box
-                                local brush_center = box_pos:add(vector2(box_size.x/2, box_size.y/2))
-                                render.add_line(brush_center:add(vector2(-3, -2)), brush_center:add(vector2(1, 4)), color(1,1,1,0.7), 1)
-                                render.add_line(brush_center:add(vector2(1, 4)), brush_center:add(vector2(3, 5)), color(1,1,1,0.7), 1)
-                                render.add_circle_filled(brush_center:add(vector2(-2, -3)), 2, color(1,1,1,0.8))
+                                -- Draw small brush icon inside the box to indicate it's a color picker
+                                local bc = box_pos:add(vector2(box_size.x/2, box_size.y/2))
+                                render.add_line(bc:add(vector2(-3, -2)), bc:add(vector2(2, 4)), color(1, 1, 1, 0.6 * op), 1)
+                                render.add_circle_filled(bc:add(vector2(-2, -1)), 1.5, color(1, 0.5, 0, 0.8 * op))
                                 
-                                -- Click to open color picker panel
+                                -- Click to open color picker
                                 if not Library.DraggingWindow and mpressed and is_mouse_in_rect(box_pos, box_size) and can_interact then
                                     element.Open = not element.Open
                                     if element.Open then
