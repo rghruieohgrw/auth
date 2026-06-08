@@ -333,29 +333,21 @@ local function draw_shadow(pos, size, radius, alpha_mult)
     end
 end
 
+-- ========== BRUSH ICON ==========
 function Library:LoadBrushIcon()
     if self.BrushLoaded then return end
     self.BrushLoaded = true
     local path = "icons/brush.png"
     if file.exists(path) then
         local tex = render.load_texture(path)
-        if tex then 
-            self.BrushTexture = tex.id
-            -- Force texture to be treated as scalable
-            self.BrushWidth = 195
-            self.BrushHeight = 130
-        end
+        if tex then self.BrushTexture = tex.id end
     else
         http.get("https://raw.githubusercontent.com/rghruieohgrw/visuals/refs/heads/main/color.png", function(body, status)
             if status == 200 then
                 if not file.exists("icons/") then file.write("icons/.keep", "") end
                 file.write(path, body, "binary")
                 local tex = render.load_texture(path)
-                if tex then 
-                    self.BrushTexture = tex.id
-                    self.BrushWidth = 195
-                    self.BrushHeight = 130
-                end
+                if tex then self.BrushTexture = tex.id end
             end
         end)
     end
@@ -505,7 +497,7 @@ function Library:CreateWindow(config)
                 local h,s,v = rgb_to_hsv(default_color)
                 local el = CreateElement({
                     Id=id, Type="ColorPicker", Text=info.Text, Value=default_color,
-                    Open=false, Callback=info.Callback, Height=52,
+                    Open=false, Callback=info.Callback, Height=36,
                     Hue=h, Saturation=s, ValueHSV=v, Alpha=default_color.a or 1,
                     EnableAlpha=info.EnableAlpha or false, Tooltip=info.Tooltip,
                     layout={pos=vector2(0,0), size=vector2(0,0), picker_pos=vector2(0,0), picker_size=vector2(0,0)}
@@ -899,8 +891,9 @@ hook.add("render", "auth_photon_render", function()
 
                             -- ColorPicker
                             elseif element.Type == "ColorPicker" then
-                                -- Full-width icon button, no label above
-                                local icon_size = vector2(group_size.x-20, 44)
+                                -- Small square brush button only
+                                local btn_dim = 32
+                                local icon_size = vector2(btn_dim, btn_dim)
                                 local icon_pos = ep
                                 element.layout.pos = icon_pos
                                 element.layout.size = icon_size
@@ -908,35 +901,27 @@ hook.add("render", "auth_photon_render", function()
                                 local is_hover = is_mouse_in_rect(icon_pos, icon_size)
                                 local is_open = element.Open
 
-                                -- button bg: slightly highlighted when open
-                                local bg_col = is_open
-                                    and color(lerp(0.12, Library.AccentColor.r, 0.12), lerp(0.12, Library.AccentColor.g, 0.12), lerp(0.16, Library.AccentColor.b, 0.18), op)
-                                    or (is_hover and color(0.18, 0.18, 0.22, op) or color(0.12, 0.12, 0.15, op))
-                                render.add_rect_filled(icon_pos, icon_pos:add(icon_size), bg_col, 7)
-                                render.add_rect(icon_pos, icon_pos:add(icon_size), apply_alpha(Library.OutlineColor, op), 7, 1)
-
-                                -- label text centered vertically on left side
-                                local label_y = icon_pos.y + icon_size.y/2 - render.get_text_size(element.Text).y/2
-                                render.add_text(vector2(icon_pos.x + 10, label_y), element.Text, apply_alpha(Library.SecondaryFontColor, op))
-
-                                -- color swatch strip on right (shows current color)
-                                local swatch_w = 32
-                                local swatch_pos = vector2(icon_pos.x + icon_size.x - swatch_w - 8, icon_pos.y + 6)
-                                local swatch_size = vector2(swatch_w, icon_size.y - 12)
-                                render.add_rect_filled(swatch_pos, swatch_pos:add(swatch_size), color(element.Value.r, element.Value.g, element.Value.b, op), 5)
-                                render.add_rect(swatch_pos, swatch_pos:add(swatch_size), color(0,0,0,0.3*op), 5, 1)
-
-                               -- texture icon
+                                -- draw only the brush texture as the button
                                 if not Library.BrushLoaded then Library:LoadBrushIcon() end
+
                                 if Library.BrushTexture then
-                                    -- Force exact size in pixels
-                                    local w = 24  -- Change this number
-                                    local h = 16  -- Change this number (maintain 195:130 ratio ~ 1.5:1)
-                                    local ico_pos = vector2(
-                                        icon_pos.x + (icon_size.x - w) / 2,
-                                        icon_pos.y + (icon_size.y - h) / 2
-                                    )
-                                    render.add_texture(Library.BrushTexture, ico_pos, ico_pos:add(vector2(w, h)), op)
+                                    local brush_alpha = is_open and op or (is_hover and op * 0.9 or op * 0.6)
+                                    render.add_texture(Library.BrushTexture, icon_pos, icon_pos:add(icon_size), brush_alpha)
+                                    -- small color dot in bottom-right corner showing current color
+                                    local dot_r = 5
+                                    local dot_center = icon_pos:add(vector2(icon_size.x - dot_r - 2, icon_size.y - dot_r - 2))
+                                    render.add_circle_filled(dot_center, dot_r, color(element.Value.r, element.Value.g, element.Value.b, op))
+                                    render.add_circle(dot_center, dot_r, color(0, 0, 0, 0.4 * op), 1)
+                                else
+                                    -- fallback: plain color swatch if texture not yet loaded
+                                    local cur = element.Value
+                                    render.add_rect_filled(icon_pos, icon_pos:add(icon_size), color(cur.r, cur.g, cur.b, op), 7)
+                                    render.add_rect(icon_pos, icon_pos:add(icon_size), color(0,0,0,0.4*op), 7, 1)
+                                end
+
+                                if not Library.DraggingWindow and mpressed and is_mouse_in_rect(icon_pos, icon_size) and can_interact then
+                                    element.Open = not element.Open
+                                    Library.ActiveColorPicker = element.Open and {obj=element, layout=element.layout} or nil
                                 end
 
                             -- Divider
@@ -960,6 +945,7 @@ hook.add("render", "auth_photon_render", function()
         end
         ::continue_window::
     end
+
     -- ========== DROPDOWN LIST ==========
     if Library.OpenedDropdown then
         local e = Library.OpenedDropdown
