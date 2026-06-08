@@ -1,11 +1,17 @@
 -- ============================================================================
--- PhotonUI: Complete Authentication & UI Library
--- Includes: Config System | Notification System | Colour Picker | Brush Icon
+-- PhotonUI: Complete Authentication & UI Library (FIXED)
 -- ============================================================================
 
 -- Resolve local player username at load time
 local _players = game:get_service("Players")
 local _localname = _players and _players.local_player and _players.local_player.name or "unknown"
+
+-- Helper function for mouse rect detection (since it was missing)
+local function is_mouse_in_rect(pos, size)
+    local mouse = input.get_mouse_position()
+    return mouse.x >= pos.x and mouse.x <= pos.x + size.x and
+           mouse.y >= pos.y and mouse.y <= pos.y + size.y
+end
 
 -- ============================================================================
 -- MAIN LIBRARY OBJECT
@@ -60,7 +66,7 @@ local Library = {
     },
     -- Icon System
     Icons = {
-        brush = nil,        -- Brush icon texture ID
+        brush = nil,
         brush_url = "https://raw.githubusercontent.com/Tolura/Prone/refs/heads/main/assets/images/PhotonChan.png",
         loaded = false
     },
@@ -78,55 +84,12 @@ local Library = {
         hex_input_active = false,
         anim_alpha = 0,
         anim_target = 0,
-        anim_speed = 0.12
-    }
+        anim_speed = 0.12,
+        alpha_enabled = false
+    },
+    ConfigFolder = "photon_configs/"
 }
 
--- ============================================================================
--- 1. ICON SYSTEM (Auto-download on first run)
--- ============================================================================
-function Library:LoadBrushIcon()
-    -- Check if icon already exists
-    local icon_path = "icons/brush.png"
-    if file.exists(icon_path) then
-        local tex = render.load_texture(icon_path)
-        if tex then
-            self.Icons.brush = tex.id
-            self.Icons.loaded = true
-            print("[Library] Brush icon loaded from disk")
-            return true
-        end
-    end
-
-    -- Download icon from URL
-    print("[Library] Downloading brush icon from:", self.Icons.brush_url)
-    http.get(self.Icons.brush_url, function(body, status)
-        if status == 200 then
-            -- Ensure icons folder exists
-            if not file.exists("icons/") then
-                file.write("icons/.keep", "")
-            end
-            -- Save the image
-            file.write(icon_path, body, "binary")
-            -- Load it into memory
-            local tex = render.load_texture(icon_path)
-            if tex then
-                self.Icons.brush = tex.id
-                self.Icons.loaded = true
-                print("[Library] Brush icon downloaded and loaded")
-            else
-                print("[Library] Failed to load downloaded icon")
-            end
-        else
-            print("[Library] Failed to download brush icon, status:", status)
-        end
-    end)
-    return false
-end
-
--- ============================================================================
--- 2. COLOUR PICKER (with hex input + animations)
--- ============================================================================
 -- Helper: Convert HSV to RGB
 local function hsv_to_rgb(h, s, v, a)
     local r, g, b
@@ -186,7 +149,7 @@ local function hex_to_color(hex)
     return color(1, 1, 1, 1)
 end
 
--- Helper: Convert colour to hex string (with alpha)
+-- Helper: Convert colour to hex string
 local function color_to_hex(c)
     local function to_hex(v)
         local n = math.floor(v * 255 + 0.5)
@@ -200,7 +163,44 @@ local function color_to_hex(c)
     end
 end
 
--- Toggle colour picker panel
+-- ============================================================================
+-- ICON SYSTEM
+-- ============================================================================
+function Library:LoadBrushIcon()
+    local icon_path = "icons/brush.png"
+    if file.exists(icon_path) then
+        local tex = render.load_texture(icon_path)
+        if tex then
+            self.Icons.brush = tex.id
+            self.Icons.loaded = true
+            print("[Library] Brush icon loaded from disk")
+            return true
+        end
+    end
+
+    print("[Library] Downloading brush icon from:", self.Icons.brush_url)
+    http.get(self.Icons.brush_url, function(body, status)
+        if status == 200 then
+            if not file.exists("icons/") then
+                file.write("icons/.keep", "")
+            end
+            file.write(icon_path, body, "binary")
+            local tex = render.load_texture(icon_path)
+            if tex then
+                self.Icons.brush = tex.id
+                self.Icons.loaded = true
+                print("[Library] Brush icon downloaded and loaded")
+            end
+        else
+            print("[Library] Failed to download brush icon, status:", status)
+        end
+    end)
+    return false
+end
+
+-- ============================================================================
+-- COLOUR PICKER
+-- ============================================================================
 function Library:ToggleColourPicker(button_pos, button_size, target_colour)
     local ui = self.ColourPickerUI
     ui.pos = button_pos + vector2(button_size.x + 10, -50)
@@ -210,66 +210,60 @@ function Library:ToggleColourPicker(button_pos, button_size, target_colour)
     ui.hex_input = color_to_hex(target_colour)
 
     if ui.open then
-        ui.anim_target = 0  -- Animate close
+        ui.anim_target = 0
         ui.open = false
     else
-        ui.anim_target = 1  -- Animate open
+        ui.anim_target = 1
         ui.open = true
     end
 end
 
--- Draw colour picker panel (call from render hook)
 function Library:DrawColourPicker()
     local ui = self.ColourPickerUI
     if ui.anim_alpha <= 0.01 and not ui.open then return end
 
-    -- Smooth animation
     if ui.anim_alpha < ui.anim_target then
         ui.anim_alpha = math.min(ui.anim_alpha + ui.anim_speed, ui.anim_target)
     elseif ui.anim_alpha > ui.anim_target then
         ui.anim_alpha = math.max(ui.anim_alpha - ui.anim_speed, ui.anim_target)
     end
 
-    -- Draw panel background
     local alpha_mult = ui.anim_alpha
     render.add_rect_filled(ui.pos, ui.pos + ui.size, color(0.15, 0.15, 0.18, alpha_mult), 10)
 
-    -- Colour spectrum (hue bar)
+    -- Hue bar
     local spectrum_pos = ui.pos + vector2(10, 10)
     local spectrum_size = vector2(ui.size.x - 20, 20)
-    for i = 0, 1, 0.01 do
-        local hue = i * 360
+    for i = 0, 1, 0.02 do
         local grad_col = hsv_to_rgb(i, 1, 1, alpha_mult)
         render.add_rect_filled(
             spectrum_pos + vector2(spectrum_size.x * i, 0),
-            spectrum_pos + vector2(spectrum_size.x * (i + 0.01), spectrum_size.y),
+            spectrum_pos + vector2(spectrum_size.x * (i + 0.02), spectrum_size.y),
             grad_col
         )
     end
 
-    -- Saturation/Value picker (square)
+    -- SV square
     local sv_pos = ui.pos + vector2(10, 40)
     local sv_size = vector2(200, 130)
-    local sv_col = hsv_to_rgb(ui.hue, 1, 1, 1)
-    -- Draw background gradient (simplified)
-    for y = 0, 1, 0.02 do
-        for x = 0, 1, 0.02 do
+    for y = 0, 1, 0.05 do
+        for x = 0, 1, 0.05 do
             local col = hsv_to_rgb(ui.hue, x, 1 - y, alpha_mult * 0.8)
             render.add_rect_filled(
                 sv_pos + vector2(sv_size.x * x, sv_size.y * y),
-                sv_pos + vector2(sv_size.x * (x + 0.02), sv_size.y * (y + 0.02)),
+                sv_pos + vector2(sv_size.x * (x + 0.05), sv_size.y * (y + 0.05)),
                 col
             )
         end
     end
 
-    -- Current colour preview
+    -- Preview
     local preview_size = vector2(45, 45)
     local preview_pos = ui.pos + vector2(ui.size.x - preview_size.x - 10, 40)
     render.add_rect_filled(preview_pos, preview_pos + preview_size, ui.current_colour, 6)
     render.add_rect(preview_pos, preview_pos + preview_size, color(1, 1, 1, 0.3 * alpha_mult), 6, 1)
 
-    -- Hex input field
+    -- Hex input
     local hex_pos = ui.pos + vector2(ui.size.x - 95, 100)
     local hex_size = vector2(80, 28)
     render.add_rect_filled(hex_pos, hex_pos + hex_size, color(0.08, 0.08, 0.1, alpha_mult), 4)
@@ -278,28 +272,16 @@ function Library:DrawColourPicker()
     local display_text = ui.hex_input_active and ui.hex_input .. "|" or ui.hex_input
     render.add_text(hex_pos + vector2(8, 6), display_text, color(1, 1, 1, alpha_mult), 12)
 
-    -- HSV values display
+    -- Info text
     local info_pos = ui.pos + vector2(10, 180)
     render.add_text(info_pos, string.format("H: %.0f°", ui.hue * 360), self.SecondaryFontColor, 11)
     render.add_text(info_pos + vector2(80, 0), string.format("S: %.0f%%", ui.saturation * 100), self.SecondaryFontColor, 11)
     render.add_text(info_pos + vector2(160, 0), string.format("V: %.0f%%", ui.value * 100), self.SecondaryFontColor, 11)
-
-    -- RGB values
     render.add_text(info_pos + vector2(0, 16), string.format("R: %.0f G: %.0f B: %.0f",
         ui.current_colour.r * 255, ui.current_colour.g * 255, ui.current_colour.b * 255),
         self.SecondaryFontColor, 11)
 
-    -- Alpha slider (if enabled)
-    if ui.alpha_enabled then
-        local alpha_pos = ui.pos + vector2(10, 212)
-        local alpha_size = vector2(ui.size.x - 20, 6)
-        render.add_rect_filled(alpha_pos, alpha_pos + alpha_size, color(0.2, 0.2, 0.25, alpha_mult), 3)
-        local thumb_x = alpha_pos.x + (ui.alpha / 1) * alpha_size.x
-        render.add_rect_filled(vector2(thumb_x - 3, alpha_pos.y - 2), vector2(thumb_x + 3, alpha_pos.y + alpha_size.y + 2), color(1, 1, 1, alpha_mult), 4)
-        render.add_text(ui.pos + vector2(10, 230), "Alpha", self.SecondaryFontColor, 10)
-    end
-
-    -- Mouse interaction for hex input
+    -- Mouse interaction
     local mouse = input.get_mouse_position()
     local hex_hover = mouse.x >= hex_pos.x and mouse.x <= hex_pos.x + hex_size.x and
                       mouse.y >= hex_pos.y and mouse.y <= hex_pos.y + hex_size.y
@@ -309,27 +291,21 @@ function Library:DrawColourPicker()
         ui.hex_input_active = false
     end
 
-    -- Handle hex input text
-    if ui.hex_input_active then
-        -- This would need actual keyboard input handling
-        -- (Simplified: just update when Enter is pressed)
-        if input.key_down(0x0D) then  -- Enter key
-            local new_col = hex_to_color(ui.hex_input)
-            if new_col then
-                ui.current_colour = new_col
-                ui.hue, ui.saturation, ui.value = rgb_to_hsv(new_col)
-                ui.alpha = new_col.a or 1
-            end
+    if ui.hex_input_active and input.key_down(0x0D) then
+        local new_col = hex_to_color(ui.hex_input)
+        if new_col then
+            ui.current_colour = new_col
+            ui.hue, ui.saturation, ui.value = rgb_to_hsv(new_col)
+            ui.alpha = new_col.a or 1
         end
     end
 end
 
 -- ============================================================================
--- 3. BRUSH BUTTON (with colour picker)
+-- BRUSH BUTTON
 -- ============================================================================
 function Library:DrawBrushButton()
     if not self.Icons.loaded or not self.Icons.brush then
-        -- Try to load/download icon
         self:LoadBrushIcon()
         return
     end
@@ -340,26 +316,21 @@ function Library:DrawBrushButton()
     local hover = mouse.x >= btn_pos.x and mouse.x <= btn_pos.x + btn_size.x and
                   mouse.y >= btn_pos.y and mouse.y <= btn_pos.y + btn_size.y
 
-    -- Background with hover effect
     local bg_col = hover and color(0.3, 0.3, 0.35, 1) or color(0.2, 0.2, 0.25, 1)
     render.add_rect_filled(btn_pos, btn_pos + btn_size, bg_col, 8)
-
-    -- Draw the icon
     render.add_texture(self.Icons.brush, btn_pos, btn_pos + btn_size, 1.0)
 
-    -- Border when active
     if self.ColourPickerUI.open then
         render.add_rect(btn_pos, btn_pos + btn_size, self.AccentColor, 8, 2)
     end
 
-    -- Handle click
     if hover and input.is_key_pressed(0x01) then
         self:ToggleColourPicker(btn_pos, btn_size, self.ColourPickerUI.current_colour)
     end
 end
 
 -- ============================================================================
--- 4. NOTIFICATION SYSTEM
+-- NOTIFICATION SYSTEM
 -- ============================================================================
 function Library:Notify(message, style)
     local styles = {
@@ -380,7 +351,7 @@ function Library:Notify(message, style)
 end
 
 -- ============================================================================
--- 5. TOOLTIP SYSTEM
+-- TOOLTIP SYSTEM
 -- ============================================================================
 function Library:DrawTooltip()
     if not self.Tooltip or self.TooltipAlpha <= 0 then return end
@@ -395,10 +366,8 @@ function Library:DrawTooltip()
 end
 
 -- ============================================================================
--- 6. CONFIGURATION SYSTEM
+-- CONFIGURATION SYSTEM
 -- ============================================================================
-Library.ConfigFolder = "photon_configs/"
-
 function Library:GetConfigList()
     local configs = {}
     if not file.exists(self.ConfigFolder) then
@@ -533,10 +502,7 @@ end
 function Library:DeleteConfig(name)
     local filename = self.ConfigFolder .. name .. ".json"
     if file.exists(filename) then
-        local ok = pcall(function() file.delete_file(filename) end)
-        if not ok or file.exists(filename) then
-            file.write(filename, "")
-        end
+        pcall(function() file.delete_file(filename) end)
         self:Notify("Config deleted: " .. name, 3)
         if self.CurrentConfig == name then
             self.CurrentConfig = ""
@@ -548,10 +514,6 @@ function Library:DeleteConfig(name)
         return true
     end
     return false
-end
-
-function Library:ListConfigs()
-    return self:GetConfigList()
 end
 
 function Library:ResetAll()
@@ -578,7 +540,7 @@ function Library:ResetAll()
     self:Notify("All settings reset!", 2)
 end
 
--- Simple JSON serialisation
+-- Simple JSON functions
 function Library:TableToJSON(tbl)
     local function serialize(val)
         if type(val) == "string" then
@@ -627,7 +589,7 @@ function Library:JSONToTable(str)
 end
 
 -- ============================================================================
--- 7. UI ELEMENT CREATION
+-- UI ELEMENT CREATION
 -- ============================================================================
 local ElementMethods = {}
 
@@ -688,10 +650,8 @@ end
 local KeyPickerMethods = {}
 function KeyPickerMethods:IsActive()
     if not self.Value or self.Value == "..." then return false end
-    local vk = nil
-    for code, name in pairs(KEY_NAMES) do
-        if name == self.Value then vk = code; break end
-    end
+    local key_map = { RButton = 0x02, LButton = 0x01, LAlt = 0x12, LShift = 0x10, LCtrl = 0x11 }
+    local vk = key_map[self.Value]
     if not vk then return false end
     if self.Mode == "Hold" then
         return input.key_down(vk)
@@ -717,7 +677,7 @@ function ColorPickerMethods:SetValue(val)
 end
 
 -- ============================================================================
--- 8. WINDOW & TAB CREATION
+-- WINDOW & TAB CREATION
 -- ============================================================================
 function Library:CreateWindow(config)
     local window = {
@@ -756,7 +716,8 @@ function Library:CreateWindow(config)
                 Side = info.Side or "Left",
                 Parent = tab,
                 Elements = {},
-                Dependencies = info.Dependencies
+                Dependencies = info.Dependencies,
+                ContentHeight = 0
             }
 
             function groupbox:IsVisible()
@@ -876,8 +837,7 @@ function Library:CreateWindow(config)
                     Hue = h, Saturation = s, ValueHSV = v,
                     Alpha = val.a,
                     EnableAlpha = info.EnableAlpha,
-                    Tooltip = info.Tooltip,
-                    layout = { pos = vector2(0, 0), size = vector2(0, 0), picker_pos = vector2(0, 0), picker_size = vector2(0, 0) }
+                    Tooltip = info.Tooltip
                 }, ColorPickerMethods)
                 table.insert(self.Elements, el)
                 Library.Options[id] = el
@@ -910,7 +870,7 @@ function Library:CreateWindow(config)
 end
 
 -- ============================================================================
--- 9. GLOBAL RENDER HOOK (UI DRAWING)
+-- GLOBAL RENDER HOOK
 -- ============================================================================
 local drawn_windows = {}
 
@@ -918,10 +878,10 @@ hook.add("render", "PhotonUI_Render", function()
     -- Draw notifications
     local now = get_tickcount()
     local start_y = 60
-    for i = #self.Notifications, 1, -1 do
-        local n = self.Notifications[i]
+    for i = #Library.Notifications, 1, -1 do
+        local n = Library.Notifications[i]
         if n.time + 3000 < now then
-            table.remove(self.Notifications, i)
+            table.remove(Library.Notifications, i)
         else
             local text_w = render.get_text_size(n.text).x
             local pos = vector2(get_screen_size().x - text_w - 20, start_y + n.y_offset)
@@ -933,38 +893,35 @@ hook.add("render", "PhotonUI_Render", function()
     end
 
     -- Draw watermark
-    if self.Watermark.Visible then
-        local text_w = render.get_text_size(self.Watermark.Text).x
-        local bg_pos = self.Watermark.Pos
-        render.add_rect_filled(bg_pos, bg_pos + vector2(text_w + 24, 26), self.MainColor, 8)
-        render.add_rect(bg_pos, bg_pos + vector2(text_w + 24, 26), self.AccentColor, 8, 1)
-        render.add_text(bg_pos + vector2(12, 6), self.Watermark.Text, self.FontColor, 13)
+    if Library.Watermark.Visible then
+        local text_w = render.get_text_size(Library.Watermark.Text).x
+        local bg_pos = Library.Watermark.Pos
+        render.add_rect_filled(bg_pos, bg_pos + vector2(text_w + 24, 26), Library.MainColor, 8)
+        render.add_rect(bg_pos, bg_pos + vector2(text_w + 24, 26), Library.AccentColor, 8, 1)
+        render.add_text(bg_pos + vector2(12, 6), Library.Watermark.Text, Library.FontColor, 13)
     end
 
     -- Draw windows
-    for _, win in ipairs(self.Windows) do
+    for _, win in ipairs(Library.Windows) do
         if win.Visible then
-            -- Smooth alpha transition
             if win.Alpha < win.TargetAlpha then
-                win.Alpha = math.min(win.Alpha + self.WindowAlphaSpeed, win.TargetAlpha)
+                win.Alpha = math.min(win.Alpha + Library.WindowAlphaSpeed, win.TargetAlpha)
             elseif win.Alpha > win.TargetAlpha then
-                win.Alpha = math.max(win.Alpha - self.WindowAlphaSpeed, win.TargetAlpha)
+                win.Alpha = math.max(win.Alpha - Library.WindowAlphaSpeed, win.TargetAlpha)
             end
 
             if win.Alpha > 0 then
                 local alpha = win.Alpha
-                render.add_rect_filled(win.Pos, win.Pos + win.Size, self.BackgroundColor, 12)
-                render.add_rect(win.Pos, win.Pos + win.Size, self.AccentColor, 12, 1.5)
+                render.add_rect_filled(win.Pos, win.Pos + win.Size, Library.BackgroundColor, 12)
+                render.add_rect(win.Pos, win.Pos + win.Size, Library.AccentColor, 12, 1.5)
 
                 -- Title bar
                 local title_bar = win.Pos + vector2(0, 0)
-                local title_size = vector2(win.Size.x, 32)
-                render.add_rect_filled(title_bar, title_bar + title_size, self.MainColor, 12, true, true, false, false)
-                render.add_text(title_bar + vector2(12, 8), win.Title, self.FontColor, 14)
+                render.add_rect_filled(title_bar, title_bar + vector2(win.Size.x, 32), Library.MainColor, 12, true, true, false, false)
+                render.add_text(title_bar + vector2(12, 8), win.Title, Library.FontColor, 14)
 
                 -- Draw tabs
                 local tabs = win.Tabs
-                local tab_count = #tabs
                 local tab_w = 100
                 local tab_h = 28
                 local tab_y = win.Pos.y + 32
@@ -972,15 +929,12 @@ hook.add("render", "PhotonUI_Render", function()
 
                 for i, tab in ipairs(tabs) do
                     local tab_x = tab_start_x + (i - 1) * (tab_w + 4)
-                    local tab_bg = win.ActiveTab == tab and self.AccentColor or self.MainColor
+                    local tab_bg = win.ActiveTab == tab and Library.AccentColor or Library.MainColor
                     render.add_rect_filled(vector2(tab_x, tab_y), vector2(tab_x + tab_w, tab_y + tab_h), tab_bg, 6)
-                    render.add_text(vector2(tab_x + tab_w / 2 - render.get_text_size(tab.Name).x / 2, tab_y + 7), tab.Name, self.FontColor, 12)
+                    render.add_text(vector2(tab_x + tab_w / 2 - render.get_text_size(tab.Name).x / 2, tab_y + 7), tab.Name, Library.FontColor, 12)
 
-                    -- Tab hover/click
-                    if is_mouse_in_rect(vector2(tab_x, tab_y), vector2(tab_w, tab_h)) then
-                        if input.is_key_pressed(0x01) then
-                            win.ActiveTab = tab
-                        end
+                    if is_mouse_in_rect(vector2(tab_x, tab_y), vector2(tab_w, tab_h)) and input.is_key_pressed(0x01) then
+                        win.ActiveTab = tab
                     end
                 end
 
@@ -994,38 +948,36 @@ hook.add("render", "PhotonUI_Render", function()
                     for _, gb in ipairs(win.ActiveTab.Groupboxes) do
                         if gb:IsVisible() then
                             local base_x = gb.Side == "Left" and left_x or right_x
-                            local y_offset = 0
+                            local elem_y = content_y + 32
 
                             -- Groupbox background
-                            render.add_rect_filled(vector2(base_x, content_y), vector2(base_x + col_w, content_y + gb.ContentHeight or 0), self.MainColor, 8)
-                            render.add_text(vector2(base_x + 12, content_y + 8), gb.Name, self.FontColor, 13)
+                            render.add_rect_filled(vector2(base_x, content_y), vector2(base_x + col_w, content_y + (gb.ContentHeight or 0)), Library.MainColor, 8)
+                            render.add_text(vector2(base_x + 12, content_y + 8), gb.Name, Library.FontColor, 13)
 
                             -- Draw elements
-                            local elem_y = content_y + 32
                             for _, el in ipairs(gb.Elements) do
                                 if el.Type == "Divider" then
                                     elem_y = elem_y + (el.Height or 14)
                                 elseif el.Type == "Label" then
-                                    render.add_text(vector2(base_x + 12, elem_y + 8), el.Text, self.SecondaryFontColor, 12)
+                                    render.add_text(vector2(base_x + 12, elem_y + 8), el.Text, Library.SecondaryFontColor, 12)
                                     elem_y = elem_y + el.Height
                                 elseif el.Type == "Toggle" then
                                     local toggle_x = base_x + 12
                                     local toggle_y = elem_y + 6
                                     local toggle_w = 32
                                     local toggle_h = 16
-                                    local bg_col = el.Value and self.AccentColor or color(0.3, 0.3, 0.35, 1)
+                                    local bg_col = el.Value and Library.AccentColor or color(0.3, 0.3, 0.35, 1)
                                     render.add_rect_filled(vector2(toggle_x, toggle_y), vector2(toggle_x + toggle_w, toggle_y + toggle_h), bg_col, toggle_h / 2)
                                     local knob_x = el.Value and toggle_x + toggle_w - toggle_h or toggle_x
                                     render.add_rect_filled(vector2(knob_x, toggle_y), vector2(knob_x + toggle_h, toggle_y + toggle_h), color(1, 1, 1, 1), toggle_h / 2)
-
-                                    render.add_text(vector2(toggle_x + toggle_w + 12, toggle_y - 2), el.Text, el.Risky and self.RiskColor or self.FontColor, 12)
+                                    render.add_text(vector2(toggle_x + toggle_w + 12, toggle_y - 2), el.Text, el.Risky and Library.RiskColor or Library.FontColor, 12)
 
                                     if is_mouse_in_rect(vector2(base_x + 12, elem_y), vector2(col_w - 24, el.Height)) and input.is_key_pressed(0x01) then
                                         el:SetValue(not el.Value)
                                     end
                                     elem_y = elem_y + el.Height
                                 elseif el.Type == "Slider" then
-                                    render.add_text(vector2(base_x + 12, elem_y + 4), el.Text, self.FontColor, 12)
+                                    render.add_text(vector2(base_x + 12, elem_y + 4), el.Text, Library.FontColor, 12)
                                     local val_x = base_x + 12
                                     local val_y = elem_y + 22
                                     local val_w = col_w - 72
@@ -1034,11 +986,11 @@ hook.add("render", "PhotonUI_Render", function()
 
                                     local percent = (el.Value - el.Min) / (el.Max - el.Min)
                                     local thumb_x = val_x + (val_w * percent)
-                                    render.add_rect_filled(vector2(val_x, val_y), vector2(thumb_x, val_y + val_h), self.AccentColor, 2)
-                                    render.add_rect_filled(vector2(thumb_x - 4, val_y - 4), vector2(thumb_x + 4, val_y + val_h + 4), self.AccentColor, 6)
+                                    render.add_rect_filled(vector2(val_x, val_y), vector2(thumb_x, val_y + val_h), Library.AccentColor, 2)
+                                    render.add_rect_filled(vector2(thumb_x - 4, val_y - 4), vector2(thumb_x + 4, val_y + val_h + 4), Library.AccentColor, 6)
 
                                     local value_text = tostring(el.Value) .. (el.Suffix or "")
-                                    render.add_text(vector2(val_x + val_w + 8, elem_y + 18), value_text, self.FontColor, 11)
+                                    render.add_text(vector2(val_x + val_w + 8, elem_y + 18), value_text, Library.FontColor, 11)
 
                                     if is_mouse_in_rect(vector2(val_x, val_y - 6), vector2(val_w, 18)) and input.key_down(0x01) then
                                         local m = input.get_mouse_position()
@@ -1049,17 +1001,17 @@ hook.add("render", "PhotonUI_Render", function()
                                 elseif el.Type == "Button" then
                                     local btn_y = elem_y + 4
                                     render.add_rect_filled(vector2(base_x + 12, btn_y), vector2(base_x + col_w - 12, btn_y + 26), color(0.2, 0.2, 0.25, 1), 6)
-                                    render.add_text(vector2(base_x + col_w / 2 - render.get_text_size(el.Text).x / 2, btn_y + 7), el.Text, self.FontColor, 12)
+                                    render.add_text(vector2(base_x + col_w / 2 - render.get_text_size(el.Text).x / 2, btn_y + 7), el.Text, Library.FontColor, 12)
 
                                     if is_mouse_in_rect(vector2(base_x + 12, btn_y), vector2(col_w - 24, 26)) and input.is_key_pressed(0x01) then
                                         if el.Func then el.Func() end
                                     end
                                     elem_y = elem_y + el.Height
                                 elseif el.Type == "Dropdown" then
-                                    render.add_text(vector2(base_x + 12, elem_y + 4), el.Text, self.FontColor, 12)
+                                    render.add_text(vector2(base_x + 12, elem_y + 4), el.Text, Library.FontColor, 12)
                                     local dd_y = elem_y + 22
                                     render.add_rect_filled(vector2(base_x + 12, dd_y), vector2(base_x + col_w - 12, dd_y + 22), color(0.2, 0.2, 0.25, 1), 6)
-                                    render.add_text(vector2(base_x + 18, dd_y + 6), el.Value, self.FontColor, 11)
+                                    render.add_text(vector2(base_x + 18, dd_y + 6), el.Value, Library.FontColor, 11)
 
                                     if is_mouse_in_rect(vector2(base_x + 12, dd_y), vector2(col_w - 24, 22)) and input.is_key_pressed(0x01) then
                                         el.Open = not el.Open
@@ -1069,7 +1021,7 @@ hook.add("render", "PhotonUI_Render", function()
                                         local dd_y_offset = dd_y + 22
                                         for i, opt in ipairs(el.Values) do
                                             render.add_rect_filled(vector2(base_x + 12, dd_y_offset), vector2(base_x + col_w - 12, dd_y_offset + 22), color(0.12, 0.12, 0.15, 1), 6)
-                                            render.add_text(vector2(base_x + 18, dd_y_offset + 6), opt, self.FontColor, 11)
+                                            render.add_text(vector2(base_x + 18, dd_y_offset + 6), opt, Library.FontColor, 11)
 
                                             if is_mouse_in_rect(vector2(base_x + 12, dd_y_offset), vector2(col_w - 24, 22)) and input.is_key_pressed(0x01) then
                                                 el:SetValue(opt)
@@ -1080,43 +1032,43 @@ hook.add("render", "PhotonUI_Render", function()
                                     end
                                     elem_y = elem_y + el.Height
                                 elseif el.Type == "Input" then
-                                    render.add_text(vector2(base_x + 12, elem_y + 4), el.Text, self.FontColor, 12)
+                                    render.add_text(vector2(base_x + 12, elem_y + 4), el.Text, Library.FontColor, 12)
                                     local in_y = elem_y + 22
-                                    local is_active = self.ActiveInput == el
+                                    local is_active = Library.ActiveInput == el
                                     render.add_rect_filled(vector2(base_x + 12, in_y), vector2(base_x + col_w - 12, in_y + 26), color(0.2, 0.2, 0.25, 1), 6)
                                     if is_active then
-                                        render.add_rect(vector2(base_x + 12, in_y), vector2(base_x + col_w - 12, in_y + 26), self.AccentColor, 6, 1)
+                                        render.add_rect(vector2(base_x + 12, in_y), vector2(base_x + col_w - 12, in_y + 26), Library.AccentColor, 6, 1)
                                     end
                                     local display_text = el.Value
                                     if display_text == "" then display_text = el.Placeholder or "Enter..." end
-                                    render.add_text(vector2(base_x + 18, in_y + 7), display_text, display_text == (el.Placeholder or "Enter...") and self.SecondaryFontColor or self.FontColor, 12)
+                                    render.add_text(vector2(base_x + 18, in_y + 7), display_text, display_text == (el.Placeholder or "Enter...") and Library.SecondaryFontColor or Library.FontColor, 12)
 
                                     if is_mouse_in_rect(vector2(base_x + 12, in_y), vector2(col_w - 24, 26)) and input.is_key_pressed(0x01) then
-                                        self.ActiveInput = el
+                                        Library.ActiveInput = el
                                     end
                                     elem_y = elem_y + el.Height
                                 elseif el.Type == "KeyPicker" then
-                                    render.add_text(vector2(base_x + 12, elem_y + 4), el.Text, self.FontColor, 12)
+                                    render.add_text(vector2(base_x + 12, elem_y + 4), el.Text, Library.FontColor, 12)
                                     local kp_y = elem_y + 22
-                                    local is_picking = self.ActiveKeyPicker == el
+                                    local is_picking = Library.ActiveKeyPicker == el
                                     render.add_rect_filled(vector2(base_x + 12, kp_y), vector2(base_x + col_w - 12, kp_y + 26), color(0.2, 0.2, 0.25, 1), 6)
                                     if is_picking then
-                                        render.add_rect(vector2(base_x + 12, kp_y), vector2(base_x + col_w - 12, kp_y + 26), self.AccentColor, 6, 1)
+                                        render.add_rect(vector2(base_x + 12, kp_y), vector2(base_x + col_w - 12, kp_y + 26), Library.AccentColor, 6, 1)
                                     end
-                                    render.add_text(vector2(base_x + 18, kp_y + 7), is_picking and "Press any key..." or el.Value, self.FontColor, 12)
+                                    render.add_text(vector2(base_x + 18, kp_y + 7), is_picking and "Press any key..." or el.Value, Library.FontColor, 12)
 
                                     if is_mouse_in_rect(vector2(base_x + 12, kp_y), vector2(col_w - 24, 26)) and input.is_key_pressed(0x01) then
-                                        self.ActiveKeyPicker = is_picking and nil or el
+                                        Library.ActiveKeyPicker = is_picking and nil or el
                                     end
                                     elem_y = elem_y + el.Height
                                 elseif el.Type == "ColorPicker" then
-                                    render.add_text(vector2(base_x + 12, elem_y + 4), el.Text, self.FontColor, 12)
+                                    render.add_text(vector2(base_x + 12, elem_y + 4), el.Text, Library.FontColor, 12)
                                     local preview_pos = vector2(base_x + col_w - 40, elem_y + 8)
                                     render.add_rect_filled(preview_pos, preview_pos + vector2(28, 16), el.Value, 4)
                                     render.add_rect(preview_pos, preview_pos + vector2(28, 16), color(1, 1, 1, 0.3), 4, 1)
 
                                     if is_mouse_in_rect(vector2(base_x + 12, elem_y), vector2(col_w - 24, el.Height)) and input.is_key_pressed(0x01) then
-                                        self:ToggleColourPicker(preview_pos, vector2(28, 16), el.Value)
+                                        Library:ToggleColourPicker(preview_pos, vector2(28, 16), el.Value)
                                     end
                                     elem_y = elem_y + el.Height
                                 end
@@ -1126,20 +1078,19 @@ hook.add("render", "PhotonUI_Render", function()
                     end
                 end
 
-                -- Store drawn windows for later
                 table.insert(drawn_windows, win)
             end
         end
     end
 
     -- Draw brush button and colour picker
-    if self.Icons.loaded then
-        self:DrawBrushButton()
-        self:DrawColourPicker()
+    if Library.Icons.loaded then
+        Library:DrawBrushButton()
+        Library:DrawColourPicker()
     end
 
     -- Draw tooltip
-    self:DrawTooltip()
+    Library:DrawTooltip()
 
     -- Window dragging
     for _, win in ipairs(drawn_windows) do
@@ -1147,17 +1098,17 @@ hook.add("render", "PhotonUI_Render", function()
             local title_bar = win.Pos + vector2(0, 0)
             local title_size = vector2(win.Size.x, 32)
             if is_mouse_in_rect(title_bar, title_size) and input.is_key_pressed(0x01) then
-                self.DraggingWindow = win
-                self.DragOffset = input.get_mouse_position() - win.Pos
+                Library.DraggingWindow = win
+                Library.DragOffset = input.get_mouse_position() - win.Pos
             end
         end
     end
 
-    if self.DraggingWindow then
+    if Library.DraggingWindow then
         if input.key_down(0x01) then
-            self.DraggingWindow.Pos = input.get_mouse_position() - self.DragOffset
+            Library.DraggingWindow.Pos = input.get_mouse_position() - Library.DragOffset
         else
-            self.DraggingWindow = nil
+            Library.DraggingWindow = nil
         end
     end
 
@@ -1165,72 +1116,17 @@ hook.add("render", "PhotonUI_Render", function()
 end)
 
 -- ============================================================================
--- 10. AUTHENTICATION EXAMPLE
--- ============================================================================
-function Library:ShowAuthUI()
-    -- Create main window
-    local main = self:CreateWindow({
-        Title = "Authentication",
-        Size = vector2(480, 400),
-        Center = true,
-        AutoShow = true
-    })
-
-    local auth_tab = main:AddTab("Login")
-    local main_gb = auth_tab:AddLeftGroupbox("License Key")
-    local status_gb = auth_tab:AddRightGroupbox("Status")
-
-    local license_input = main_gb:AddInput("license_key", {
-        Text = "License Key",
-        Default = "",
-        Placeholder = "XXXX-XXXX-XXXX-XXXX"
-    })
-
-    local login_btn = main_gb:AddButton({
-        Text = "Authenticate",
-        Func = function()
-            local key = license_input.Value
-            if #key >= 16 then
-                status_gb:AddLabel("Authenticating...")
-                -- Simulate HTTP request
-                http.get("https://your-api.com/verify?key=" .. key, function(body, status)
-                    if status == 200 then
-                        status_gb:AddLabel("✓ Authentication successful!")
-                        status_gb:AddLabel("Welcome, " .. _localname)
-                        self:Notify("Authentication successful!", 2)
-                    else
-                        status_gb:AddLabel("✗ Invalid license key")
-                        self:Notify("Authentication failed", 4)
-                    end
-                end)
-            else
-                self:Notify("Invalid license format", 3)
-            end
-        end
-    })
-
-    -- Config dropdown
-    self:CreateConfigSection(main_gb)
-end
-
--- ============================================================================
--- 11. INITIALISATION
+-- INITIALISATION
 -- ============================================================================
 function Library:Init()
-    -- Try to load brush icon
     self:LoadBrushIcon()
-
-    -- Load configs list
     self.ConfigList = self:GetConfigList()
-
-    -- Show the UI
-    self:ShowAuthUI()
-
-    print("loaded auth")
+    print("[PhotonUI] Library initialised successfully")
     self:Notify("UI loaded", 2)
 end
 
 -- ============================================================================
 -- RETURN LIBRARY
 -- ============================================================================
+_G.AuthUI = Library
 return Library
