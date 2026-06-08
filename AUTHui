@@ -52,66 +52,36 @@ local Library = {
         PendingTab = nil
     },
 
-    -- ========== CONFIG SYSTEM ==========
+-- ========== CONFIG SYSTEM ==========
     ConfigFolder = "photon_configs/",
-    
-    -- Get list of all config files
+
+    -- Get list of all config files by scanning the folder directly
     GetConfigList = function(self)
         local configs = {}
-        -- Since Photon doesn't have directory listing, we'll maintain a manifest file
-        local manifest_file = self.ConfigFolder .. "manifest.json"
-        if file.exists(manifest_file) then
-            local manifest_data = file.read(manifest_file)
-            local manifest = self:JSONToTable(manifest_data)
-            if manifest and manifest.configs then
-                configs = manifest.configs
-            end
-        end
-        return configs
-    end,
-    
-    -- Save config to manifest
-    UpdateManifest = function(self, config_name)
-        local configs = self:GetConfigList()
-        local found = false
-        for i, name in ipairs(configs) do
-            if name == config_name then
-                found = true
-                break
-            end
-        end
-        if not found then
-            table.insert(configs, config_name)
-        end
-        local manifest = { configs = configs, last_updated = get_unixtime() }
-        local manifest_json = self:TableToJSON(manifest)
-        file.write(self.ConfigFolder .. "manifest.json", manifest_json)
-        self.ConfigList = configs
-        return configs
-    end,
-    
-    -- Remove config from manifest
-    RemoveFromManifest = function(self, config_name)
-        local configs = self:GetConfigList()
-        local new_configs = {}
-        for i, name in ipairs(configs) do
-            if name ~= config_name then
-                table.insert(new_configs, name)
-            end
-        end
-        local manifest = { configs = new_configs, last_updated = get_unixtime() }
-        local manifest_json = self:TableToJSON(manifest)
-        file.write(self.ConfigFolder .. "manifest.json", manifest_json)
-        self.ConfigList = new_configs
-        return new_configs
-    end,
-    
-    SaveConfig = function(self, name)
-        -- Create folder if needed
+        -- Ensure folder exists by writing a keep file if needed
         if not file.exists(self.ConfigFolder) then
             file.write(self.ConfigFolder .. ".keep", "")
         end
-        
+        local files = file.list_folder(self.ConfigFolder)
+        if files then
+            for _, name in ipairs(files) do
+                -- Only include .json files, skip manifest and .keep
+                local stem = name:match("^(.+)%.json$")
+                if stem and stem ~= "manifest" then
+                    table.insert(configs, stem)
+                end
+            end
+        end
+        table.sort(configs)
+        return configs
+    end,
+
+    SaveConfig = function(self, name)
+        -- Ensure folder exists
+        if not file.exists(self.ConfigFolder) then
+            file.write(self.ConfigFolder .. ".keep", "")
+        end
+
         local config = {
             toggles = {},
             options = {},
@@ -119,12 +89,12 @@ local Library = {
             saved_at = get_unixtime(),
             game = get_placeid()
         }
-        
+
         -- Save all toggles
         for id, toggle in pairs(self.Toggles) do
             config.toggles[id] = toggle.Value
         end
-        
+
         -- Save all options
         for id, opt in pairs(self.Options) do
             if opt.Type == "Slider" then
@@ -140,60 +110,55 @@ local Library = {
                 config.options[id] = { type = "ColorPicker", value = { r = c.r, g = c.g, b = c.b, a = c.a } }
             end
         end
-        
+
         -- Save window positions
         config.windows = {}
         for i, win in ipairs(self.Windows) do
             config.windows[i] = { pos = { x = win.Pos.x, y = win.Pos.y } }
         end
-        
+
         -- Save watermark position
         config.watermark = { x = self.Watermark.Pos.x, y = self.Watermark.Pos.y }
-        
-        -- Convert to JSON and save
+
         local json_str = self:TableToJSON(config)
-        local filename = self.ConfigFolder .. name .. ".json"
-        
-        file.write(filename, json_str)
-        
-        -- Update manifest
-        self:UpdateManifest(name)
-        
+        file.write(self.ConfigFolder .. name .. ".json", json_str)
+
         self.CurrentConfig = name
         self:Notify("Config saved: " .. name, 3)
-        
-        -- Update config dropdown if it exists
+
+        -- Refresh dropdown from disk
         if self.ConfigDropdown then
             self.ConfigDropdown:SetValues(self:GetConfigList())
             self.ConfigDropdown:SetValue(name)
         end
-        
+
         return true
     end,
-    
+
     LoadConfig = function(self, name)
         local filename = self.ConfigFolder .. name .. ".json"
         if not file.exists(filename) then
             self:Notify("Config not found: " .. name, 3)
             return false
         end
-        
+
         local json_str = file.read(filename)
-        local config = self:JSONToTable(json_str)
-        
-        if not config then
-            self:Notify("Failed to load config: " .. name, 3)
+        -- Guard against empty files (e.g. a previously "deleted" config)
+        if not json_str or json_str == "" then
+            self:Notify("Config is empty: " .. name, 3)
             return false
         end
-        
-        -- Load toggles
-        for id, value in pairs(config.toggles or {}) do
-            if self.Toggles[id] then
-                self.Toggles[id]:SetValue(value)
-            end
+
+        local config = self:JSONToTable(json_str)
+        if not config then
+            self:Notify("Failed to parse config: " .. name, 3)
+            return false
         end
-        
-        -- Load options
+
+        for id, value in pairs(config.toggles or {}) do
+            if self.Toggles[id] then self.Toggles[id]:SetValue(value) end
+        end
+
         for id, data in pairs(config.options or {}) do
             if self.Options[id] then
                 if data.type == "Slider" then
@@ -211,44 +176,38 @@ local Library = {
                 end
             end
         end
-        
-        -- Load window positions
+
         for i, win_data in ipairs(config.windows or {}) do
             if self.Windows[i] then
                 self.Windows[i].Pos = vector2(win_data.pos.x, win_data.pos.y)
             end
         end
-        
-        -- Load watermark position
+
         if config.watermark then
             self.Watermark.Pos = vector2(config.watermark.x, config.watermark.y)
         end
-        
+
         self.ConfigLoaded = true
         self.CurrentConfig = name
         self:Notify("Config loaded: " .. name, 3)
-        
-        -- Update config dropdown if it exists
+
         if self.ConfigDropdown then
             self.ConfigDropdown:SetValue(name)
         end
-        
+
         return true
     end,
-    
+
     DeleteConfig = function(self, name)
         local filename = self.ConfigFolder .. name .. ".json"
         if file.exists(filename) then
-            -- Photon might not have file delete, so overwrite with empty
-            file.write(filename, "")
-            self:RemoveFromManifest(name)
-            self:Notify("Config deleted: " .. name, 3)
-            
-            if self.CurrentConfig == name then
-                self.CurrentConfig = ""
+            -- Try proper delete first, fall back to overwriting with empty
+            local ok = pcall(function() file.delete(filename) end)
+            if not ok or file.exists(filename) then
+                file.write(filename, "")
             end
-            
-            -- Update config dropdown
+            self:Notify("Config deleted: " .. name, 3)
+            if self.CurrentConfig == name then self.CurrentConfig = "" end
             if self.ConfigDropdown then
                 self.ConfigDropdown:SetValues(self:GetConfigList())
                 self.ConfigDropdown:SetValue("")
@@ -256,6 +215,32 @@ local Library = {
             return true
         end
         return false
+    end,
+
+    ListConfigs = function(self)
+        return self:GetConfigList()
+    end,
+
+    ResetAll = function(self)
+        for id, toggle in pairs(self.Toggles) do
+            toggle:SetValue(false)
+        end
+        for id, opt in pairs(self.Options) do
+            if opt.Type == "Slider" then
+                opt:SetValue((opt.Min + opt.Max) / 2)
+            elseif opt.Type == "Dropdown" and not opt.Multi then
+                opt:SetValue(opt.Values[1])
+            elseif opt.Type == "Input" then
+                opt:SetValue("")
+            elseif opt.Type == "KeyPicker" then
+                opt:SetValue("...")
+            elseif opt.Type == "ColorPicker" then
+                opt:SetValue(color(1, 1, 1, 1))
+            end
+        end
+        self.CurrentConfig = ""
+        if self.ConfigDropdown then self.ConfigDropdown:SetValue("") end
+        self:Notify("All settings reset!", 3)
     end,
     
     ListConfigs = function(self)
