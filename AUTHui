@@ -453,7 +453,7 @@ function Library:CreateWindow(config)
         Alpha = config.AutoShow and 1 or 0,
         TargetAlpha = config.AutoShow and 1 or 0,
         Glass = config.Glass or false,
-        Glasscolor = config.Glasscolor, -- Stores the custom Glass Color
+        Glasscolor = config.Glasscolor or color(0.55, 0.60, 0.90, 1), -- Add this line to save the glass color
     }
 
     function window:AddTab(name)
