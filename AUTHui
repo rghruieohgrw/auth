@@ -1,6 +1,3 @@
--- AUTHui - Photon UI Library
--- Clean rewrite: fixed icon loading, cleaned color picker, removed duplicate draw_shadow
-
 local _players = game:get_service("Players")
 local _localname = _players and _players.local_player and _players.local_player.name or "unknown"
 
@@ -48,36 +45,47 @@ local Library = {
     BrushLoaded = false,
 }
 
--- ========== CONFIG SYSTEM ==========
-function Library:GetConfigList()
-    local configs = {}
-    local manifest_file = self.ConfigFolder .. "manifest.json"
-    if file.exists(manifest_file) then
-        local data = file.read(manifest_file)
-        local manifest = self:JSONToTable(data)
-        if manifest and manifest.configs then configs = manifest.configs end
-    end
-    return configs
+-- ========== GLASS HELPERS ==========
+-- Call these instead of raw render calls when Glass mode is active.
+-- glass_panel: draws a frosted-glass style background for popups/panels.
+local function glass_panel(pos, size, radius, alpha)
+    local a = alpha or 1
+    -- deep dark layer
+    render.add_rect_filled(pos, pos:add(size), color(0.05, 0.05, 0.10, 0.82 * a), radius)
+    -- specular top shimmer
+    render.add_rect_filled(pos, pos:add(vector2(size.x, math.min(size.y, 24))),
+        color(1, 1, 1, 0.04 * a), radius)
+    -- frosted blue-white tint overlay
+    render.add_rect_filled(pos, pos:add(size), color(0.55, 0.60, 0.90, 0.06 * a), radius)
+    -- inner glow border (bright top/left)
+    render.add_rect(pos, pos:add(size), color(1, 1, 1, 0.10 * a), radius, 1)
+    -- outer subtle border
+    render.add_rect(pos:add(vector2(1,1)), pos:add(size):add(vector2(-1,-1)), color(0.4, 0.45, 0.80, 0.18 * a), radius - 1, 1)
 end
 
-function Library:UpdateManifest(config_name)
-    local configs = self:GetConfigList()
-    local found = false
-    for _, name in ipairs(configs) do if name == config_name then found = true; break end end
-    if not found then table.insert(configs, config_name) end
-    file.write(self.ConfigFolder .. "manifest.json", self:TableToJSON({ configs = configs, last_updated = get_unixtime() }))
+-- ========== CONFIG SYSTEM ==========
+-- Uses file.list_folder / file.delete_file (Photon new API) — no manifest needed.
+
+function Library:GetConfigList()
+    local configs = {}
+    if not file.exists(self.ConfigFolder) then return configs end
+    local files = file.list_folder(self.ConfigFolder)
+    if files then
+        for _, name in ipairs(files) do
+            local config_name = name:match("^(.+)%.json$")
+            if config_name then
+                table.insert(configs, config_name)
+            end
+        end
+    end
+    table.sort(configs)
     self.ConfigList = configs
     return configs
 end
 
-function Library:RemoveFromManifest(config_name)
-    local configs = self:GetConfigList()
-    local new_configs = {}
-    for _, name in ipairs(configs) do if name ~= config_name then table.insert(new_configs, name) end end
-    file.write(self.ConfigFolder .. "manifest.json", self:TableToJSON({ configs = new_configs, last_updated = get_unixtime() }))
-    self.ConfigList = new_configs
-    return new_configs
-end
+-- Stubs kept for API compatibility
+function Library:UpdateManifest(config_name) self.ConfigList = self:GetConfigList(); return self.ConfigList end
+function Library:RemoveFromManifest(config_name) self.ConfigList = self:GetConfigList(); return self.ConfigList end
 
 function Library:SaveConfig(name)
     if not file.exists(self.ConfigFolder) then file.write(self.ConfigFolder .. ".keep", "") end
@@ -101,7 +109,6 @@ function Library:SaveConfig(name)
     for i, win in ipairs(self.Windows) do config.windows[i] = { pos = { x = win.Pos.x, y = win.Pos.y } } end
     config.watermark = { x = self.Watermark.Pos.x, y = self.Watermark.Pos.y }
     file.write(self.ConfigFolder .. name .. ".json", self:TableToJSON(config))
-    self:UpdateManifest(name)
     self.CurrentConfig = name
     self:Notify("Config saved: " .. name, 3)
     if self.ConfigDropdown then
@@ -147,8 +154,12 @@ end
 function Library:DeleteConfig(name)
     local filename = self.ConfigFolder .. name .. ".json"
     if file.exists(filename) then
-        file.write(filename, "")
-        self:RemoveFromManifest(name)
+        -- Use new delete_file API; fall back to writing empty string if not available
+        if file.delete_file then
+            file.delete_file(filename)
+        else
+            file.write(filename, "")
+        end
         self:Notify("Config deleted: " .. name, 3)
         if self.CurrentConfig == name then self.CurrentConfig = "" end
         if self.ConfigDropdown then
@@ -339,9 +350,8 @@ function Library:LoadBrushIcon()
     local path = "icons/brush.png"
     if file.exists(path) then
         local tex = render.load_texture(path)
-        if tex then 
+        if tex then
             self.BrushTexture = tex.id
-            -- Force texture to be treated as scalable
             self.BrushWidth = 195
             self.BrushHeight = 130
         end
@@ -351,7 +361,7 @@ function Library:LoadBrushIcon()
                 if not file.exists("icons/") then file.write("icons/.keep", "") end
                 file.write(path, body, "binary")
                 local tex = render.load_texture(path)
-                if tex then 
+                if tex then
                     self.BrushTexture = tex.id
                     self.BrushWidth = 195
                     self.BrushHeight = 130
@@ -446,6 +456,8 @@ function Library:CreateWindow(config)
         ActiveTab = nil,
         Alpha = config.AutoShow and 1 or 0,
         TargetAlpha = config.AutoShow and 1 or 0,
+        -- Glass = true enables liquid glass on this window and all its popups
+        Glass = config.Glass or false,
     }
 
     function window:AddTab(name)
@@ -505,9 +517,12 @@ function Library:CreateWindow(config)
                 local h,s,v = rgb_to_hsv(default_color)
                 local el = CreateElement({
                     Id=id, Type="ColorPicker", Text=info.Text, Value=default_color,
-                    Open=false, Callback=info.Callback, Height=52,
+                    Open=false, Callback=info.Callback,
+                    -- Height is now compact: just enough for the icon button row
+                    Height=26,
                     Hue=h, Saturation=s, ValueHSV=v, Alpha=default_color.a or 1,
                     EnableAlpha=info.EnableAlpha or false, Tooltip=info.Tooltip,
+                    HoverAnim=0,
                     layout={pos=vector2(0,0), size=vector2(0,0), picker_pos=vector2(0,0), picker_size=vector2(0,0)}
                 }, ColorPickerMethods)
                 table.insert(self.Elements, el); Library.Options[id] = el
@@ -548,28 +563,36 @@ function Library:OpenWindow(window) window.Visible=true; window.TargetAlpha=1 en
 function Library:CloseWindow(window) window.TargetAlpha=0 end
 
 -- ========== TOOLTIP ==========
-local function render_tooltip(alpha)
+local function render_tooltip(alpha, glass)
     if Library.Tooltip and Library.Tooltip.Text and alpha > 0.01 then
         local mp = input.get_mouse_position()
         local ts = render.get_text_size(Library.Tooltip.Text)
         local tsz = vector2(ts.x+14, ts.y+10)
         local tp = mp:add(vector2(14,14))
         draw_shadow(tp, tsz, 6, alpha)
-        render.add_rect_filled(tp, tp:add(tsz), apply_alpha(Library.MainColor, alpha), 6)
-        render.add_rect(tp, tp:add(tsz), apply_alpha(Library.OutlineColor, alpha), 6, 1)
+        if glass then
+            glass_panel(tp, tsz, 8, alpha)
+        else
+            render.add_rect_filled(tp, tp:add(tsz), apply_alpha(Library.MainColor, alpha), 6)
+            render.add_rect(tp, tp:add(tsz), apply_alpha(Library.OutlineColor, alpha), 6, 1)
+        end
         render.add_text(tp:add(vector2(7,5)), Library.Tooltip.Text, apply_alpha(Library.FontColor, alpha))
     end
 end
 
 -- ========== WATERMARK ==========
-local function draw_watermark()
+local function draw_watermark(glass)
     if not Library.Watermark.Visible then return end
     local ts = render.get_text_size(Library.Watermark.Text)
     local wsz = vector2(ts.x+16, 24)
     local pos = Library.Watermark.Pos
     draw_shadow(pos, wsz, 6, 1)
-    render.add_rect_filled(pos, pos:add(wsz), Library.MainColor, 6)
-    render.add_rect(pos, pos:add(wsz), Library.OutlineColor, 6, 1)
+    if glass then
+        glass_panel(pos, wsz, 8, 1)
+    else
+        render.add_rect_filled(pos, pos:add(wsz), Library.MainColor, 6)
+        render.add_rect(pos, pos:add(wsz), Library.OutlineColor, 6, 1)
+    end
     render.add_text(pos:add(vector2(8,4)), Library.Watermark.Text, Library.FontColor)
 end
 
@@ -597,6 +620,12 @@ hook.add("render", "auth_photon_render", function()
     local mdown = input.key_down(0x01)
 
     Library.ModalOpen = Library.OpenedDropdown or Library.ActiveColorPicker or Library.ActiveKeyPicker or Library.ActiveInput or Library.RightClickMenu
+
+    -- determine global glass state (any window with Glass=true drives it)
+    local global_glass = false
+    for _, w in ipairs(Library.Windows) do
+        if w.Glass then global_glass = true; break end
+    end
 
     -- dismiss modals on outside click
     if mpressed and Library.ModalOpen then
@@ -684,6 +713,8 @@ hook.add("render", "auth_photon_render", function()
             local wa = window.Alpha
             if wa < 0.01 then goto continue_window end
 
+            local glass = window.Glass
+
             local title_bar_pos = window.Pos
             local title_bar_size = vector2(window.Size.x, 34)
             if not Library.DraggingWindow and mpressed and is_mouse_in_rect(title_bar_pos, title_bar_size) and not Library.ModalOpen then
@@ -691,13 +722,21 @@ hook.add("render", "auth_photon_render", function()
             end
 
             draw_shadow(window.Pos, window.Size, 12, wa)
-            render.add_rect_filled(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.BackgroundColor, wa), 10)
-            render.add_rect(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.OutlineColor, wa), 10, 1)
+            if glass then
+                glass_panel(window.Pos, window.Size, 12, wa)
+            else
+                render.add_rect_filled(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.BackgroundColor, wa), 10)
+                render.add_rect(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.OutlineColor, wa), 10, 1)
+            end
             render.add_text(window.Pos:add(vector2(14,10)), window.Title, apply_alpha(Library.FontColor, wa))
 
             local msp = window.Pos:add(vector2(12,36))
             local mss = vector2(window.Size.x-24, window.Size.y-48)
-            render.add_rect_filled(msp, msp:add(mss), apply_alpha(Library.BackgroundColor, wa), 8)
+            if glass then
+                render.add_rect_filled(msp, msp:add(mss), color(0,0,0,0.10*wa), 8)
+            else
+                render.add_rect_filled(msp, msp:add(mss), apply_alpha(Library.BackgroundColor, wa), 8)
+            end
 
             -- tabs
             local tab_area_pos = msp:add(vector2(4,4))
@@ -708,9 +747,18 @@ hook.add("render", "auth_photon_render", function()
                 local ts2 = vector2(tw, 24)
                 local active_target = anim.PendingTab or window.ActiveTab
                 local is_active = (active_target == tab)
-                local tab_bg = is_active and apply_alpha(Library.FontColor, wa) or apply_alpha(color(0.1,0.1,0.13,1), wa)
-                local tab_fg = is_active and apply_alpha(Library.BackgroundColor, wa) or apply_alpha(Library.SecondaryFontColor, wa)
+                local tab_bg, tab_fg
+                if glass then
+                    tab_bg = is_active and color(1,1,1,0.18*wa) or color(1,1,1,0.04*wa)
+                    tab_fg = is_active and apply_alpha(Library.FontColor, wa) or apply_alpha(Library.SecondaryFontColor, wa)
+                else
+                    tab_bg = is_active and apply_alpha(Library.FontColor, wa) or apply_alpha(color(0.1,0.1,0.13,1), wa)
+                    tab_fg = is_active and apply_alpha(Library.BackgroundColor, wa) or apply_alpha(Library.SecondaryFontColor, wa)
+                end
                 render.add_rect_filled(tp2, tp2:add(ts2), tab_bg, 6)
+                if glass and is_active then
+                    render.add_rect(tp2, tp2:add(ts2), color(1,1,1,0.22*wa), 6, 1)
+                end
                 render.add_text(tp2:add(vector2(10,4)), tab.Name, tab_fg)
                 if not Library.DraggingWindow and mpressed and is_mouse_in_rect(tp2, ts2) and anim.State == "Idle" and window.ActiveTab ~= tab then
                     anim.State = "FadingOut"; anim.PendingTab = tab
@@ -735,8 +783,12 @@ hook.add("render", "auth_photon_render", function()
                         local group_size = vector2(window.Size.x/2-20, current_y)
 
                         draw_shadow(group_pos, group_size, 8, op * 0.5)
-                        render.add_rect_filled(group_pos, group_pos:add(group_size), apply_alpha(Library.MainColor, op), 8)
-                        render.add_rect(group_pos, group_pos:add(group_size), apply_alpha(Library.OutlineColor, op), 8, 1)
+                        if glass then
+                            glass_panel(group_pos, group_size, 10, op)
+                        else
+                            render.add_rect_filled(group_pos, group_pos:add(group_size), apply_alpha(Library.MainColor, op), 8)
+                            render.add_rect(group_pos, group_pos:add(group_size), apply_alpha(Library.OutlineColor, op), 8, 1)
+                        end
                         render.add_text(group_pos:add(vector2(10,8)), groupbox.Name, apply_alpha(Library.FontColor, op))
 
                         local element_y = 30
@@ -810,10 +862,20 @@ hook.add("render", "auth_photon_render", function()
                                 local is_hover = is_mouse_in_rect(b_pos, b_size)
                                 element.HoverAnim = element.HoverAnim + ((is_hover and 1 or 0) - element.HoverAnim) * 0.07
                                 local ha = element.HoverAnim
-                                local bg = color(lerp(Library.BackgroundColor.r,Library.FontColor.r,ha), lerp(Library.BackgroundColor.g,Library.FontColor.g,ha), lerp(Library.BackgroundColor.b,Library.FontColor.b,ha), 1)
-                                local fg = color(lerp(Library.FontColor.r,Library.BackgroundColor.r,ha), lerp(Library.FontColor.g,Library.BackgroundColor.g,ha), lerp(Library.FontColor.b,Library.BackgroundColor.b,ha), 1)
+                                local bg, fg
+                                if glass then
+                                    bg = color(1, 1, 1, lerp(0.06, 0.16, ha) * op)
+                                    fg = apply_alpha(Library.FontColor, op)
+                                else
+                                    bg = color(lerp(Library.BackgroundColor.r,Library.FontColor.r,ha), lerp(Library.BackgroundColor.g,Library.FontColor.g,ha), lerp(Library.BackgroundColor.b,Library.FontColor.b,ha), 1)
+                                    fg = color(lerp(Library.FontColor.r,Library.BackgroundColor.r,ha), lerp(Library.FontColor.g,Library.BackgroundColor.g,ha), lerp(Library.FontColor.b,Library.BackgroundColor.b,ha), 1)
+                                end
                                 render.add_rect_filled(b_pos, b_pos:add(b_size), apply_alpha(bg, op), 6)
-                                render.add_rect(b_pos, b_pos:add(b_size), apply_alpha(Library.OutlineColor, op), 6, 1)
+                                if glass then
+                                    render.add_rect(b_pos, b_pos:add(b_size), color(1,1,1, lerp(0.08,0.20,ha)*op), 6, 1)
+                                else
+                                    render.add_rect(b_pos, b_pos:add(b_size), apply_alpha(Library.OutlineColor, op), 6, 1)
+                                end
                                 local btn_text = element.Text
                                 if element.DoubleClick and get_unixtime()-element.LastClick<1 and element.LastClick~=0 then btn_text = "Confirm?" end
                                 local clip = get_clipped_text(btn_text, b_size.x-12)
@@ -836,12 +898,21 @@ hook.add("render", "auth_photon_render", function()
                                 element.Layout = {pos=d_pos, size=d_size, list_pos=vector2(0,0), list_size=vector2(0,0)}
                                 local is_hover = is_mouse_in_rect(d_pos, d_size)
                                 element.HoverAlpha = element.HoverAlpha + ((is_hover and 1 or 0) - element.HoverAlpha) * 0.07
-                                local bg = color(
-                                    lerp(Library.BackgroundColor.r, Library.MainColor.r, element.HoverAlpha),
-                                    lerp(Library.BackgroundColor.g, Library.MainColor.g, element.HoverAlpha),
-                                    lerp(Library.BackgroundColor.b, Library.MainColor.b, element.HoverAlpha), 1)
+                                local bg
+                                if glass then
+                                    bg = color(1,1,1, lerp(0.05,0.12,element.HoverAlpha)*op)
+                                else
+                                    bg = color(
+                                        lerp(Library.BackgroundColor.r, Library.MainColor.r, element.HoverAlpha),
+                                        lerp(Library.BackgroundColor.g, Library.MainColor.g, element.HoverAlpha),
+                                        lerp(Library.BackgroundColor.b, Library.MainColor.b, element.HoverAlpha), 1)
+                                end
                                 render.add_rect_filled(d_pos, d_pos:add(d_size), apply_alpha(bg, op), 6)
-                                render.add_rect(d_pos, d_pos:add(d_size), apply_alpha(Library.OutlineColor, op), 6, 1)
+                                if glass then
+                                    render.add_rect(d_pos, d_pos:add(d_size), color(1,1,1,0.12*op), 6, 1)
+                                else
+                                    render.add_rect(d_pos, d_pos:add(d_size), apply_alpha(Library.OutlineColor, op), 6, 1)
+                                end
                                 local display_text
                                 if element.Multi then
                                     local sel = {}
@@ -894,49 +965,79 @@ hook.add("render", "auth_photon_render", function()
                                     Library.ActiveKeyPicker = {obj=element, layout=element.layout}
                                 end
                                 if not Library.DraggingWindow and input.is_key_pressed(0x02) and is_mouse_in_rect(k_pos, k_size) and can_interact then
-                                    Library.RightClickMenu = {obj=element, pos=mp, Alpha=0}
+                                    Library.RightClickMenu = {obj=element, pos=mp, Alpha=0, Glass=glass}
                                 end
 
-                            -- ColorPicker
+                            -- ColorPicker — compact icon button only
+                            -- Layout: [label text] ... [color swatch] [brush icon button]
+                            -- Clicking the brush icon toggles the picker open/closed.
                             elseif element.Type == "ColorPicker" then
-                                -- Full-width icon button, no label above
-                                local icon_size = vector2(group_size.x-20, 44)
-                                local icon_pos = ep
+                                local row_w = group_size.x - 20
+                                local icon_btn_size = vector2(22, 22)  -- small square button
+                                local swatch_w = 20
+                                local swatch_gap = 4
+                                -- total right side: swatch + gap + icon btn
+                                local right_w = swatch_w + swatch_gap + icon_btn_size.x
+
+                                -- label
+                                local label_y = ep.y + (icon_btn_size.y/2) - render.get_text_size(element.Text).y/2
+                                render.add_text(vector2(ep.x, label_y), element.Text, apply_alpha(Library.SecondaryFontColor, op))
+
+                                -- color swatch (shows current color, not clickable)
+                                local swatch_pos = vector2(ep.x + row_w - right_w, ep.y + 2)
+                                local swatch_size = vector2(swatch_w, icon_btn_size.y - 4)
+                                render.add_rect_filled(swatch_pos, swatch_pos:add(swatch_size), color(element.Value.r, element.Value.g, element.Value.b, op), 4)
+                                render.add_rect(swatch_pos, swatch_pos:add(swatch_size), color(0,0,0,0.35*op), 4, 1)
+
+                                -- icon button (brush) — this is the clickable part
+                                local icon_pos = vector2(ep.x + row_w - icon_btn_size.x, ep.y)
                                 element.layout.pos = icon_pos
-                                element.layout.size = icon_size
-
-                                local is_hover = is_mouse_in_rect(icon_pos, icon_size)
+                                element.layout.size = icon_btn_size
+                                local is_hover = is_mouse_in_rect(icon_pos, icon_btn_size)
                                 local is_open = element.Open
+                                element.HoverAnim = element.HoverAnim + (((is_hover or is_open) and 1 or 0) - element.HoverAnim) * 0.10
 
-                                -- button bg: slightly highlighted when open
-                                local bg_col = is_open
-                                    and color(lerp(0.12, Library.AccentColor.r, 0.12), lerp(0.12, Library.AccentColor.g, 0.12), lerp(0.16, Library.AccentColor.b, 0.18), op)
-                                    or (is_hover and color(0.18, 0.18, 0.22, op) or color(0.12, 0.12, 0.15, op))
-                                render.add_rect_filled(icon_pos, icon_pos:add(icon_size), bg_col, 7)
-                                render.add_rect(icon_pos, icon_pos:add(icon_size), apply_alpha(Library.OutlineColor, op), 7, 1)
+                                -- button background
+                                local btn_bg
+                                if glass then
+                                    btn_bg = color(1,1,1, lerp(0.06, 0.20, element.HoverAnim) * op)
+                                else
+                                    btn_bg = color(
+                                        lerp(0.10, Library.AccentColor.r * 0.4 + 0.08, element.HoverAnim),
+                                        lerp(0.10, Library.AccentColor.g * 0.4 + 0.08, element.HoverAnim),
+                                        lerp(0.12, Library.AccentColor.b * 0.4 + 0.12, element.HoverAnim),
+                                        op)
+                                end
+                                render.add_rect_filled(icon_pos, icon_pos:add(icon_btn_size), btn_bg, 5)
+                                -- accent ring when open
+                                if is_open then
+                                    render.add_rect(icon_pos, icon_pos:add(icon_btn_size), apply_alpha(accent, 0.6*op), 5, 1)
+                                else
+                                    render.add_rect(icon_pos, icon_pos:add(icon_btn_size),
+                                        glass and color(1,1,1,0.12*op) or apply_alpha(Library.OutlineColor, op), 5, 1)
+                                end
 
-                                -- label text centered vertically on left side
-                                local label_y = icon_pos.y + icon_size.y/2 - render.get_text_size(element.Text).y/2
-                                render.add_text(vector2(icon_pos.x + 10, label_y), element.Text, apply_alpha(Library.SecondaryFontColor, op))
-
-                                -- color swatch strip on right (shows current color)
-                                local swatch_w = 32
-                                local swatch_pos = vector2(icon_pos.x + icon_size.x - swatch_w - 8, icon_pos.y + 6)
-                                local swatch_size = vector2(swatch_w, icon_size.y - 12)
-                                render.add_rect_filled(swatch_pos, swatch_pos:add(swatch_size), color(element.Value.r, element.Value.g, element.Value.b, op), 5)
-                                render.add_rect(swatch_pos, swatch_pos:add(swatch_size), color(0,0,0,0.3*op), 5, 1)
-
-                               -- texture icon
+                                -- brush icon
                                 if not Library.BrushLoaded then Library:LoadBrushIcon() end
                                 if Library.BrushTexture then
-                                    -- Force exact size in pixels
-                                    local w = 24  -- Change this number
-                                    local h = 16  -- Change this number (maintain 195:130 ratio ~ 1.5:1)
-                                    local ico_pos = vector2(
-                                        icon_pos.x + (icon_size.x - w) / 2,
-                                        icon_pos.y + (icon_size.y - h) / 2
-                                    )
-                                    render.add_texture(Library.BrushTexture, ico_pos, ico_pos:add(vector2(w, h)), op)
+                                    local iw, ih = 14, 10
+                                    local tx = icon_pos.x + (icon_btn_size.x - iw) / 2
+                                    local ty = icon_pos.y + (icon_btn_size.y - ih) / 2
+                                    render.add_texture(Library.BrushTexture, vector2(tx, ty), vector2(tx+iw, ty+ih), op)
+                                else
+                                    -- fallback: colored dot if texture not loaded
+                                    local cx = icon_pos.x + icon_btn_size.x / 2
+                                    local cy = icon_pos.y + icon_btn_size.y / 2
+                                    render.add_circle_filled(vector2(cx,cy), 5, color(element.Value.r, element.Value.g, element.Value.b, op))
+                                end
+
+                                if not Library.DraggingWindow and mpressed and is_mouse_in_rect(icon_pos, icon_btn_size) and can_interact then
+                                    element.Open = not element.Open
+                                    if element.Open then
+                                        Library.ActiveColorPicker = {obj=element, layout=element.layout, glass=glass}
+                                    else
+                                        Library.ActiveColorPicker = nil
+                                    end
                                 end
 
                             -- Divider
@@ -960,17 +1061,25 @@ hook.add("render", "auth_photon_render", function()
         end
         ::continue_window::
     end
+
     -- ========== DROPDOWN LIST ==========
     if Library.OpenedDropdown then
         local e = Library.OpenedDropdown
+        -- determine glass from the parent window
+        local dd_glass = false
+        for _, w in ipairs(Library.Windows) do if w.Glass then dd_glass = true; break end end
         local list_pos = e.Layout.pos:add(vector2(0, e.Layout.size.y+2))
         local list_h = math.min(#e.Values,6)*22+4
         local list_size = vector2(e.Layout.size.x, list_h)
         e.Layout.list_pos = list_pos
         e.Layout.list_size = list_size
         draw_shadow(list_pos, list_size, 6, 1)
-        render.add_rect_filled(list_pos, list_pos:add(list_size), Library.MainColor, 6)
-        render.add_rect(list_pos, list_pos:add(list_size), Library.OutlineColor, 6, 1)
+        if dd_glass then
+            glass_panel(list_pos, list_size, 8, 1)
+        else
+            render.add_rect_filled(list_pos, list_pos:add(list_size), Library.MainColor, 6)
+            render.add_rect(list_pos, list_pos:add(list_size), Library.OutlineColor, 6, 1)
+        end
         local item_y = 2
         for _, value in ipairs(e.Values) do
             local ip = list_pos:add(vector2(1, item_y))
@@ -993,6 +1102,7 @@ hook.add("render", "auth_photon_render", function()
     -- ========== COLOUR PICKER PANEL ==========
     if Library.ActiveColorPicker then
         local e = Library.ActiveColorPicker.obj
+        local cp_glass = Library.ActiveColorPicker.glass or false
 
         local pad    = 10
         local sv_dim = 150
@@ -1006,6 +1116,7 @@ hook.add("render", "auth_photon_render", function()
         local p_h      = pad + sv_dim + pad
 
         local scr   = get_screen_size()
+        -- anchor below the icon button
         local p_pos = e.layout.pos:add(vector2(0, e.layout.size.y + 6))
         if p_pos.x + p_w > scr.x - 4 then p_pos = vector2(scr.x - p_w - 4, p_pos.y) end
         if p_pos.y + p_h > scr.y - 4 then p_pos = vector2(p_pos.x, e.layout.pos.y - p_h - 6) end
@@ -1014,8 +1125,12 @@ hook.add("render", "auth_photon_render", function()
         e.layout.picker_size = vector2(p_w, p_h)
 
         draw_shadow(p_pos, vector2(p_w, p_h), 10, 1)
-        render.add_rect_filled(p_pos, p_pos:add(vector2(p_w, p_h)), Library.MainColor, 10)
-        render.add_rect(p_pos, p_pos:add(vector2(p_w, p_h)), Library.OutlineColor, 10, 1)
+        if cp_glass then
+            glass_panel(p_pos, vector2(p_w, p_h), 12, 1)
+        else
+            render.add_rect_filled(p_pos, p_pos:add(vector2(p_w, p_h)), Library.MainColor, 10)
+            render.add_rect(p_pos, p_pos:add(vector2(p_w, p_h)), Library.OutlineColor, 10, 1)
+        end
 
         -- SV field
         local sv_pos  = p_pos:add(vector2(pad, pad))
@@ -1075,6 +1190,7 @@ hook.add("render", "auth_photon_render", function()
     -- ========== RIGHT-CLICK MENU ==========
     if Library.RightClickMenu then
         local rcm = Library.RightClickMenu
+        local rcm_glass = rcm.Glass or false
         local options = {"Always","Hold","Toggle"}
         local item_h = 24
         local pad = 4
@@ -1085,7 +1201,11 @@ hook.add("render", "auth_photon_render", function()
         local rp = vector2(math.min(rcm.pos.x, scr.x-rcm_w-4), math.min(rcm.pos.y, scr.y-rcm_h-4))
         rcm.Alpha = rcm.Alpha + (1 - rcm.Alpha) * 0.12
         draw_shadow(rp, rcm_sz, 8, rcm.Alpha)
-        render.add_rect_filled(rp, rp:add(rcm_sz), apply_alpha(Library.MainColor, rcm.Alpha), 7)
+        if rcm_glass then
+            glass_panel(rp, rcm_sz, 9, rcm.Alpha)
+        else
+            render.add_rect_filled(rp, rp:add(rcm_sz), apply_alpha(Library.MainColor, rcm.Alpha), 7)
+        end
         for i, opt in ipairs(options) do
             local ip = rp:add(vector2(pad, pad+(i-1)*item_h))
             local isz = vector2(rcm_w-pad*2, item_h)
@@ -1130,18 +1250,22 @@ hook.add("render", "auth_photon_render", function()
             local slide_sign = (Library.NotificationPosition=="Top Right" or Library.NotificationPosition=="Bottom Right") and 1 or -1
             local np = vector2(nx + slide_sign*n.OffsetX, cur_y)
             draw_shadow(np, nsz, 6, n.Alpha)
-            render.add_rect_filled(np, np:add(nsz), color(Library.MainColor.r,Library.MainColor.g,Library.MainColor.b,n.Alpha), 6)
-            render.add_rect(np, np:add(nsz), color(Library.OutlineColor.r,Library.OutlineColor.g,Library.OutlineColor.b,n.Alpha), 6, 1)
+            if global_glass then
+                glass_panel(np, nsz, 8, n.Alpha)
+            else
+                render.add_rect_filled(np, np:add(nsz), color(Library.MainColor.r,Library.MainColor.g,Library.MainColor.b,n.Alpha), 6)
+                render.add_rect(np, np:add(nsz), color(Library.OutlineColor.r,Library.OutlineColor.g,Library.OutlineColor.b,n.Alpha), 6, 1)
+            end
             render.add_rect_filled(np:add(vector2(0,3)), np:add(vector2(2,nsz.y-3)), color(Library.AccentColor.r,Library.AccentColor.g,Library.AccentColor.b,n.Alpha), 2)
             render.add_text(np:add(vector2(10,5)), n.Text, color(Library.FontColor.r,Library.FontColor.g,Library.FontColor.b,n.Alpha))
             run_y = run_y + nsz.y + 6
         end
     end
 
-    draw_watermark()
+    draw_watermark(global_glass)
     local tooltip_target = (Library.Tooltip ~= nil) and 1 or 0
     Library.TooltipAlpha = Library.TooltipAlpha + (tooltip_target - Library.TooltipAlpha) * 0.07
-    if anim.State=="Idle" then render_tooltip(Library.TooltipAlpha) end
+    if anim.State=="Idle" then render_tooltip(Library.TooltipAlpha, global_glass) end
 end)
 
 -- ========== KEY HANDLERS ==========
