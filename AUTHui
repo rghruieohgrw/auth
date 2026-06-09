@@ -143,7 +143,7 @@ local function glass_panel(pos, size, radius, alpha)
 
     -- base fill: tinted dark layer
     render.add_rect_filled(pos, pos:add(size),
-        color(gc.r * 0.12, gc.g * 0.12, gc.b * 0.14, trans * a), radius)
+        color(gc.r * 0.01, gc.g * 0.01, gc.b * 0.01, trans * a), radius)
 
     -- specular shimmer strip along top edge
     local shimmer_h = math.min(size.y, 20)
