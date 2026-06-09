@@ -570,14 +570,14 @@ local function render_tooltip(alpha, glass)
         local tsz = vector2(ts.x + 14, ts.y + 10)
         local tp = mp:add(vector2(14, 14))
         
-        draw_shadow(tp, tsz, 6, alpha)
-        
-        if glass then
-            glass_panel(tp, tsz, 8, alpha)
-        else
-            render.add_rect_filled(tp, tp:add(tsz), apply_alpha(Library.MainColor, alpha), 6)
-            render.add_rect(tp, tp:add(tsz), apply_alpha(Library.OutlineColor, alpha), 6, 1)
-        end
+        -- In the render hook, around line 362-370:
+draw_shadow(window.Pos, window.Size, 12, wa)
+if glass then
+    glass_panel(window.Pos, window.Size, 12, wa, window.Glasscolor, window.Blur or 0.06)
+else
+    render.add_rect_filled(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.BackgroundColor, wa), 10)
+    render.add_rect(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.OutlineColor, wa), 10, 1)
+end
         
         render.add_text(tp:add(vector2(7, 5)), Library.Tooltip.Text, apply_alpha(Library.FontColor, alpha))
     end
