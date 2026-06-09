@@ -654,7 +654,7 @@ hook.add("render", "auth_photon_render", function()
         end
     end
 
-    if mpressed and Library.RightClickMenu then
+    if mpressed and Library.RightClickMenu thenbrush
         local rcm_sz = vector2(110, 3*24+8)
         if not is_mouse_in_rect(Library.RightClickMenu.pos, rcm_sz) then Library.RightClickMenu = nil end
     end
@@ -1020,7 +1020,7 @@ hook.add("render", "auth_photon_render", function()
                                 -- brush icon
                                 if not Library.BrushLoaded then Library:LoadBrushIcon() end
                                 if Library.BrushTexture then
-                                    local iw, ih = 32, 32
+                                    local iw, ih = 58, 58
                                     local tx = icon_pos.x + (icon_btn_size.x - iw) / 2
                                     local ty = icon_pos.y + (icon_btn_size.y - ih) / 2
                                     render.add_texture(Library.BrushTexture, vector2(tx, ty), vector2(tx+iw, ty+ih), op)
