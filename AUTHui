@@ -565,36 +565,27 @@ function Library:OpenWindow(window) window.Visible=true; window.TargetAlpha=1 en
 function Library:CloseWindow(window) window.TargetAlpha=0 end
 
 -- ========== TOOLTIP & WATERMARK ==========
-local function render_tooltip(alpha, glass, glass_color)
+-- ========== TOOLTIP ==========
+local function render_tooltip(alpha, glass)
     if Library.Tooltip and Library.Tooltip.Text and alpha > 0.01 then
         local mp = input.get_mouse_position()
+        if not mp then return end -- Safeguard: exit if mouse position is not available
+        
         local ts = render.get_text_size(Library.Tooltip.Text)
-        local tsz = vector2(ts.x+14, ts.y+10)
-        local tp = mp:add(vector2(14,14))
+        local tsz = vector2(ts.x + 14, ts.y + 10)
+        local tp = mp:add(vector2(14, 14))
+        
         draw_shadow(tp, tsz, 6, alpha)
+        
         if glass then
-            glass_panel(tp, tsz, 8, alpha, glass_color)
+            glass_panel(tp, tsz, 8, alpha)
         else
             render.add_rect_filled(tp, tp:add(tsz), apply_alpha(Library.MainColor, alpha), 6)
             render.add_rect(tp, tp:add(tsz), apply_alpha(Library.OutlineColor, alpha), 6, 1)
         end
-        render.add_text(tp:add(vector2(7,5)), Library.Tooltip.Text, apply_alpha(Library.FontColor, alpha))
+        
+        render.add_text(tp:add(vector2(7, 5)), Library.Tooltip.Text, apply_alpha(Library.FontColor, alpha))
     end
-end
-
-local function draw_watermark(glass, glass_color)
-    if not Library.Watermark.Visible then return end
-    local ts = render.get_text_size(Library.Watermark.Text)
-    local wsz = vector2(ts.x+16, 24)
-    local pos = Library.Watermark.Pos
-    draw_shadow(pos, wsz, 6, 1)
-    if glass then
-        glass_panel(pos, wsz, 8, 1, glass_color)
-    else
-        render.add_rect_filled(pos, pos:add(wsz), Library.MainColor, 6)
-        render.add_rect(pos, pos:add(wsz), Library.OutlineColor, 6, 1)
-    end
-    render.add_text(pos:add(vector2(8,4)), Library.Watermark.Text, Library.FontColor)
 end
 
 -- ========== MAIN RENDER HOOK ==========
