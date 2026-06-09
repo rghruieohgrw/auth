@@ -973,7 +973,7 @@ hook.add("render", "auth_photon_render", function()
                             -- Clicking the brush icon toggles the picker open/closed.
                             elseif element.Type == "ColorPicker" then
                                 local row_w = group_size.x - 20
-                                local icon_btn_size = vector2(22, 22)  -- small square button
+                                local icon_btn_size = vector2(35, 35)  -- small square button
                                 local swatch_w = 20
                                 local swatch_gap = 4
                                 -- total right side: swatch + gap + icon btn
