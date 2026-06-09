@@ -699,17 +699,24 @@ hook.add("render", "auth_photon_render", function()
     local can_interact = not Library.ModalOpen and anim.State == "Idle"
     Library.Tooltip = nil
 
-    for _, window in ipairs(Library.Windows) do
+for _, window in ipairs(Library.Windows) do
         if window.Visible then
             window.Alpha = window.Alpha + (window.TargetAlpha - window.Alpha) * 0.07
             local wa = window.Alpha
             if wa < 0.01 then goto continue_window end
 
             local glass = window.Glass
-            local gcolor = window.Glasscolor
+            local glass_color = window.Glasscolor -- Grab the color attached to the window
 
-            -- Window rendering implementation goes here utilizing `glass_panel` with `gcolor`
-            -- [Rest of your rendering logic goes here...]
+            -- Draw main window body
+            if glass then
+                glass_panel(window.Pos, window.Size, 8, wa, glass_color) -- Pass it here!
+            else
+                render.add_rect_filled(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.MainColor, wa), 8)
+                render.add_rect(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.OutlineColor, wa), 8, 1)
+            end
+
+            -- ... rest of your tab/element rendering ...
 
             ::continue_window::
         end
