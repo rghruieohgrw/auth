@@ -1020,7 +1020,7 @@ hook.add("render", "auth_photon_render", function()
                                 -- brush icon
                                 if not Library.BrushLoaded then Library:LoadBrushIcon() end
                                 if Library.BrushTexture then
-                                    local iw, ih = 14, 10
+                                    local iw, ih = 32, 32
                                     local tx = icon_pos.x + (icon_btn_size.x - iw) / 2
                                     local ty = icon_pos.y + (icon_btn_size.y - ih) / 2
                                     render.add_texture(Library.BrushTexture, vector2(tx, ty), vector2(tx+iw, ty+ih), op)
