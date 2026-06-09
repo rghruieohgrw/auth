@@ -1,3 +1,6 @@
+-- AUTHui - Photon UI Library
+-- Rewrite: compact color picker button (icon only), new file API config system, liquid glass support
+
 local _players = game:get_service("Players")
 local _localname = _players and _players.local_player and _players.local_player.name or "unknown"
 
@@ -972,8 +975,8 @@ hook.add("render", "auth_photon_render", function()
                             -- Layout: [label text] ... [color swatch] [brush icon button]
                             -- Clicking the brush icon toggles the picker open/closed.
                             elseif element.Type == "ColorPicker" then
-                                local row_w = group_size.x - 40
-                                local icon_btn_size = vector2(40, 40)  -- small square button
+                                local row_w = group_size.x - 20
+                                local icon_btn_size = vector2(22, 22)  -- small square button
                                 local swatch_w = 20
                                 local swatch_gap = 4
                                 -- total right side: swatch + gap + icon btn
@@ -1008,7 +1011,7 @@ hook.add("render", "auth_photon_render", function()
                                         lerp(0.12, Library.AccentColor.b * 0.4 + 0.12, element.HoverAnim),
                                         op)
                                 end
-                                render.add_rect_filled(icon_pos, icon_pos:add(icon_btn_size), btn_bg, 20)
+                                render.add_rect_filled(icon_pos, icon_pos:add(icon_btn_size), btn_bg, 5)
                                 -- accent ring when open
                                 if is_open then
                                     render.add_rect(icon_pos, icon_pos:add(icon_btn_size), apply_alpha(accent, 0.6*op), 5, 1)
