@@ -43,10 +43,10 @@ local Library = {
     BrushTexture  = nil,
     BrushLoaded   = false,
     -- global glass state (set when any window has Glass=true, used for watermark/notifications/tooltips)
-    _GlobalGlass  = false,
+    _GlobalGlass  = true,
     _GlobalGlassColor = color(1, 1, 1, 1),
-    _GlobalBlur   = 0,
-    _GlobalGlassTrans = 0.82,
+    _GlobalBlur   = 0.15,
+    _GlobalGlassTrans = 0.2,
 }
 
 -- ========== HELPERS ==========
