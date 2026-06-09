@@ -46,17 +46,18 @@ local Library = {
 }
 
 -- ========== GLASS HELPERS ==========
-local function glass_panel(pos, size, radius, alpha, tint)
+local function glass_panel(pos, size, radius, alpha, tint, override_tp)
     local a = alpha or 1
-    local t_color = tint or color(0.55, 0.60, 0.90, 1) -- fallback default blue-white tint
+    local t_color = tint or color(0.55, 0.60, 0.90, 1)
+    local tp = override_tp or 0.06
     
     -- deep dark layer
     render.add_rect_filled(pos, pos:add(size), color(0.05, 0.05, 0.10, 0.82 * a), radius)
     -- specular top shimmer
     render.add_rect_filled(pos, pos:add(vector2(size.x, math.min(size.y, 24))),
         color(1, 1, 1, 0.04 * a), radius)
-    -- frosted custom tint overlay using the provided RGBA values
-    render.add_rect_filled(pos, pos:add(size), color(t_color.r, t_color.g, t_color.b, 0.06 * a), radius)
+    -- frosted custom tint overlay using dynamic RGBA & custom transparency
+    render.add_rect_filled(pos, pos:add(size), color(t_color.r, t_color.g, t_color.b, tp * a), radius)
     -- inner glow border (bright top/left)
     render.add_rect(pos, pos:add(size), color(1, 1, 1, 0.10 * a), radius, 1)
     -- outer subtle border
@@ -452,9 +453,9 @@ function Library:CreateWindow(config)
         ActiveTab = nil,
         Alpha = config.AutoShow and 1 or 0,
         TargetAlpha = config.AutoShow and 1 or 0,
-        -- Glass = true enables liquid glass on this window and all its popups
         Glass = config.Glass or false,
         Glasscolor = config.Glasscolor or color(0.55, 0.60, 0.90, 1),
+        Glasstp = config.Glasstp or 0.1, -- Default transparency (base overlay opacity)
     }
 
     function window:AddTab(name)
@@ -871,14 +872,14 @@ hook.add("render", "auth_photon_render", function()
                 Library.DraggingWindow = window; Library.DragOffset = mp:subtract(window.Pos)
             end
 
+-- In your window render block (around line 362):
 draw_shadow(window.Pos, window.Size, 12, wa)
-    if glass then
-        glass_panel(window.Pos, window.Size, 12, wa, window.Glasscolor) -- Pass it here
-    else
-
-                render.add_rect_filled(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.BackgroundColor, wa), 10)
-                render.add_rect(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.OutlineColor, wa), 10, 1)
-            end
+if glass then
+    glass_panel(window.Pos, window.Size, 12, wa, window.Glasscolor, window.Glasstp)
+else
+    render.add_rect_filled(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.BackgroundColor, wa), 10)
+    render.add_rect(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.OutlineColor, wa), 10, 1)
+end
             render.add_text(window.Pos:add(vector2(14,10)), window.Title, apply_alpha(Library.FontColor, wa))
 
             local msp = window.Pos:add(vector2(12,36))
@@ -935,11 +936,11 @@ draw_shadow(window.Pos, window.Size, 12, wa)
 
                         draw_shadow(group_pos, group_size, 8, op * 0.5)
                         if glass then
-                            glass_panel(group_pos, group_size, 10, op)
-                        else
-                            render.add_rect_filled(group_pos, group_pos:add(group_size), apply_alpha(Library.MainColor, op), 8)
-                            render.add_rect(group_pos, group_pos:add(group_size), apply_alpha(Library.OutlineColor, op), 8, 1)
-                        end
+    glass_panel(gb_pos, gb_size, 8, wa, window.Glasscolor, window.Glasstp)
+else
+    render.add_rect_filled(gb_pos, gb_pos:add(gb_size), apply_alpha(Library.MainColor, wa), 6)
+    render.add_rect(gb_pos, gb_pos:add(gb_size), apply_alpha(Library.OutlineColor, wa), 6, 1)
+end
                         render.add_text(group_pos:add(vector2(10,8)), groupbox.Name, apply_alpha(Library.FontColor, op))
 
                         local element_y = 30
