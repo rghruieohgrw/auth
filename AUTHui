@@ -1,6 +1,3 @@
--- AUTHui - Photon UI Library
--- v3: GlassColor, Blur, GlassTransparency per-window; config uses file.list_folder/delete_file; compact color picker
-
 local _players = game:get_service("Players")
 local _localname = _players and _players.local_player and _players.local_player.name or "unknown"
 
