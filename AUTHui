@@ -733,7 +733,7 @@ hook.add("render", "auth_photon_render", function()
             local msp = window.Pos:add(vector2(12,36))
             local mss = vector2(window.Size.x-24, window.Size.y-48)
             if glass then
-                render.add_rect_filled(msp, msp:add(mss), color(0,1,0,0.10*wa), 8)
+                render.add_rect_filled(msp, msp:add(mss), color(0,0,0,0.10*wa), 8)
             else
                 render.add_rect_filled(msp, msp:add(mss), apply_alpha(Library.BackgroundColor, wa), 8)
             end
