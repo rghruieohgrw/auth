@@ -47,7 +47,7 @@ local Library = {
 
 -- ========== GLASS HELPERS ==========
 local function glass_panel(pos, size, radius, alpha, tint, override_tp)
-    if not pos or not size then return end -- Safely ignores rendering when coordinates are not yet initialized
+    if not pos or not size then return end -- MUST be the first line to stop the crash
     
     local a = alpha or 1
     local t_color = tint or color(0.55, 0.60, 0.90, 1)
