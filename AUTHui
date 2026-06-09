@@ -46,7 +46,7 @@ local Library = {
     _GlobalGlass  = true,
     _GlobalGlassColor = color(1, 1, 1, 1),
     _GlobalBlur   = 0.15,
-    _GlobalGlassTrans = 0.2,
+    _GlobalGlassTrans = 444,
 }
 
 -- ========== HELPERS ==========
