@@ -1,4 +1,3 @@
-
 local _players = game:get_service("Players")
 local _localname = _players and _players.local_player and _players.local_player.name or "unknown"
 
@@ -47,26 +46,25 @@ local Library = {
 }
 
 -- ========== GLASS HELPERS ==========
--- Call these instead of raw render calls when Glass mode is active.
--- glass_panel: draws a frosted-glass style background for popups/panels.
-local function glass_panel(pos, size, radius, alpha)
+-- ========== GLASS HELPERS ==========
+local function glass_panel(pos, size, radius, alpha, window)
+    if not pos or not size then return end
+    
     local a = alpha or 1
-    -- deep dark layer
-    render.add_rect_filled(pos, pos:add(size), color(0.05, 0.05, 0.10, 0.82 * a), radius)
-    -- specular top shimmer
-    render.add_rect_filled(pos, pos:add(vector2(size.x, math.min(size.y, 24))),
-        color(1, 1, 1, 0.04 * a), radius)
-    -- frosted blue-white tint overlay
-    render.add_rect_filled(pos, pos:add(size), color(0.55, 0.60, 0.90, 0.06 * a), radius)
-    -- inner glow border (bright top/left)
+    if not window then window = { Glasscolor = color(0.55, 0.60, 0.90, 1), Glasstp = 0.1, Blur = 0.06 } end
+    
+    local glass_color = window.Glasscolor or color(0.55, 0.60, 0.90, 1)
+    local blur_intensity = window.Blur or 0.06
+    local tp = window.Glasstp or 0.1
+    
+    render.add_rect_filled(pos, pos:add(size), color(0.05, 0.05, 0.10, (0.82 * tp) * a), radius)
+    render.add_rect_filled(pos, pos:add(vector2(size.x, math.min(size.y, 24))), color(1, 1, 1, 0.04 * a), radius)
+    render.add_rect_filled(pos, pos:add(size), color(glass_color.r, glass_color.g, glass_color.b, blur_intensity * a), radius)
     render.add_rect(pos, pos:add(size), color(1, 1, 1, 0.10 * a), radius, 1)
-    -- outer subtle border
-    render.add_rect(pos:add(vector2(1,1)), pos:add(size):add(vector2(-1,-1)), color(0.4, 0.45, 0.80, 0.18 * a), radius - 1, 1)
+    render.add_rect(pos:add(vector2(1, 1)), pos:add(size):add(vector2(-1, -1)), color(0.4, 0.45, 0.80, 0.18 * a), radius - 1, 1)
 end
 
 -- ========== CONFIG SYSTEM ==========
--- Uses file.list_folder / file.delete_file (Photon new API) — no manifest needed.
-
 function Library:GetConfigList()
     local configs = {}
     if not file.exists(self.ConfigFolder) then return configs end
@@ -84,7 +82,6 @@ function Library:GetConfigList()
     return configs
 end
 
--- Stubs kept for API compatibility
 function Library:UpdateManifest(config_name) self.ConfigList = self:GetConfigList(); return self.ConfigList end
 function Library:RemoveFromManifest(config_name) self.ConfigList = self:GetConfigList(); return self.ConfigList end
 
@@ -155,7 +152,6 @@ end
 function Library:DeleteConfig(name)
     local filename = self.ConfigFolder .. name .. ".json"
     if file.exists(filename) then
-        -- Use new delete_file API; fall back to writing empty string if not available
         if file.delete_file then
             file.delete_file(filename)
         else
@@ -457,10 +453,11 @@ function Library:CreateWindow(config)
         ActiveTab = nil,
         Alpha = config.AutoShow and 1 or 0,
         TargetAlpha = config.AutoShow and 1 or 0,
-        -- Glass = true enables liquid glass on this window and all its popups
         Glass = config.Glass or false,
+        Glasscolor = config.Glasscolor or color(0.55, 0.60, 0.90, 1),
+        Glasstp = config.Glasstp or 0.1,
     }
-
+    
     function window:AddTab(name)
         local tab = {Name=name, Parent=window, Groupboxes={}}
 
@@ -519,7 +516,6 @@ function Library:CreateWindow(config)
                 local el = CreateElement({
                     Id=id, Type="ColorPicker", Text=info.Text, Value=default_color,
                     Open=false, Callback=info.Callback,
-                    -- Height is now compact: just enough for the icon button row
                     Height=26,
                     Hue=h, Saturation=s, ValueHSV=v, Alpha=default_color.a or 1,
                     EnableAlpha=info.EnableAlpha or false, Tooltip=info.Tooltip,
@@ -563,39 +559,184 @@ function Library:SetWatermark(text) self.Watermark.Text=text; self.Watermark.Vis
 function Library:OpenWindow(window) window.Visible=true; window.TargetAlpha=1 end
 function Library:CloseWindow(window) window.TargetAlpha=0 end
 
+-- ========== TOOLTIP & WATERMARK ==========
 -- ========== TOOLTIP ==========
 local function render_tooltip(alpha, glass)
     if Library.Tooltip and Library.Tooltip.Text and alpha > 0.01 then
         local mp = input.get_mouse_position()
+        if not mp then return end -- Safeguard: exit if mouse position is not available
+        
         local ts = render.get_text_size(Library.Tooltip.Text)
-        local tsz = vector2(ts.x+14, ts.y+10)
-        local tp = mp:add(vector2(14,14))
+        local tsz = vector2(ts.x + 14, ts.y + 10)
+        local tp = mp:add(vector2(14, 14))
+        
         draw_shadow(tp, tsz, 6, alpha)
+        
         if glass then
             glass_panel(tp, tsz, 8, alpha)
         else
             render.add_rect_filled(tp, tp:add(tsz), apply_alpha(Library.MainColor, alpha), 6)
             render.add_rect(tp, tp:add(tsz), apply_alpha(Library.OutlineColor, alpha), 6, 1)
         end
-        render.add_text(tp:add(vector2(7,5)), Library.Tooltip.Text, apply_alpha(Library.FontColor, alpha))
+        
+        render.add_text(tp:add(vector2(7, 5)), Library.Tooltip.Text, apply_alpha(Library.FontColor, alpha))
     end
 end
 
--- ========== WATERMARK ==========
-local function draw_watermark(glass)
-    if not Library.Watermark.Visible then return end
-    local ts = render.get_text_size(Library.Watermark.Text)
-    local wsz = vector2(ts.x+16, 24)
-    local pos = Library.Watermark.Pos
-    draw_shadow(pos, wsz, 6, 1)
-    if glass then
-        glass_panel(pos, wsz, 8, 1)
-    else
-        render.add_rect_filled(pos, pos:add(wsz), Library.MainColor, 6)
-        render.add_rect(pos, pos:add(wsz), Library.OutlineColor, 6, 1)
+-- ========== MAIN RENDER HOOK ==========
+hook.add("render", "auth_photon_render", function()
+    local anim = Library.Animation
+    if anim.State == "FadingOut" then
+        anim.CurrentAlpha = anim.CurrentAlpha - anim.Speed
+        if anim.CurrentAlpha <= 0 then
+            anim.CurrentAlpha = 0
+            if anim.PendingTab then anim.PendingTab.Parent.ActiveTab = anim.PendingTab; anim.PendingTab = nil end
+            anim.State = "FadingIn"
+        end
+    elseif anim.State == "FadingIn" then
+        anim.CurrentAlpha = anim.CurrentAlpha + anim.Speed
+        if anim.CurrentAlpha >= 1 then anim.CurrentAlpha = 1; anim.State = "Idle" end
     end
-    render.add_text(pos:add(vector2(8,4)), Library.Watermark.Text, Library.FontColor)
-end
+
+    Library.Hue = (Library.Hue + 0.002) % 1
+    Library.CurrentRainbowColor = hsv_to_rgb(Library.Hue, 0.8, 1)
+
+    local accent = Library.AccentColor
+    local mp = input.get_mouse_position()
+    local mpressed = input.is_key_pressed(0x01)
+    local mdown = input.key_down(0x01)
+
+    Library.ModalOpen = Library.OpenedDropdown or Library.ActiveColorPicker or Library.ActiveKeyPicker or Library.ActiveInput or Library.RightClickMenu
+
+    local global_glass = false
+    local active_glass_color = nil
+    for _, w in ipairs(Library.Windows) do
+        if w.Glass then 
+            global_glass = true 
+            active_glass_color = w.Glasscolor
+            break 
+        end
+    end
+
+    if mpressed and Library.ModalOpen then
+        if Library.OpenedDropdown then
+            local dd = Library.OpenedDropdown
+            if dd.Layout and not (is_mouse_in_rect(dd.Layout.pos, dd.Layout.size) or is_mouse_in_rect(dd.Layout.list_pos, dd.Layout.list_size)) then
+                dd.Open = false; Library.OpenedDropdown = nil
+            end
+        end
+        if Library.ActiveColorPicker then
+            local acp = Library.ActiveColorPicker
+            if not is_mouse_in_rect(acp.layout.picker_pos, acp.layout.picker_size) then
+                acp.obj.Open = false; Library.ActiveColorPicker = nil
+            end
+        end
+        if Library.ActiveKeyPicker then
+            local akp = Library.ActiveKeyPicker
+            if not is_mouse_in_rect(akp.layout.pos, akp.layout.size) then
+                akp.obj.Picking = false; Library.ActiveKeyPicker = nil
+            end
+        end
+        if Library.ActiveInput then
+            if not is_mouse_in_rect(Library.ActiveInput.layout.pos, Library.ActiveInput.layout.size) then
+                Library.ActiveInput = nil
+            end
+        end
+    end
+
+    if mpressed and Library.RightClickMenu then
+        local rcm_sz = vector2(110, 3*24+8)
+        if not is_mouse_in_rect(Library.RightClickMenu.pos, rcm_sz) then Library.RightClickMenu = nil end
+    end
+
+    if Library.DraggingWindow then
+        if mdown then Library.DraggingWindow.Pos = mp:subtract(Library.DragOffset)
+        else Library.DraggingWindow = nil end
+    end
+
+    if Library.ActiveSlider then
+        if mdown then
+            local s, l = Library.ActiveSlider.obj, Library.ActiveSlider.layout
+            local r = (math.clamp(mp.x, l.pos.x, l.pos.x+l.size.x) - l.pos.x) / l.size.x
+            local v = s.Min + (s.Max-s.Min)*r
+            if s.Value ~= v then s:SetValue(v) end
+        else Library.ActiveSlider = nil end
+    end
+
+    if Library.ActiveColorPicker and mdown then
+        local cp = Library.ActiveColorPicker.obj
+        local layout = Library.ActiveColorPicker.layout
+        if is_mouse_in_rect(layout.sv_pos, layout.sv_size) then
+            cp.Saturation = math.clamp((mp.x - layout.sv_pos.x) / layout.sv_size.x, 0, 1)
+            cp.ValueHSV = 1 - math.clamp((mp.y - layout.sv_pos.y) / layout.sv_size.y, 0, 1)
+            cp:SetValue(hsv_to_rgb(cp.Hue, cp.Saturation, cp.ValueHSV, cp.Alpha))
+        elseif layout.hue_pos and is_mouse_in_rect(layout.hue_pos, layout.hue_size) then
+            cp.Hue = math.clamp((mp.y - layout.hue_pos.y) / layout.hue_size.y, 0, 1)
+            cp:SetValue(hsv_to_rgb(cp.Hue, cp.Saturation, cp.ValueHSV, cp.Alpha))
+        elseif cp.EnableAlpha and layout.alpha_pos and is_mouse_in_rect(layout.alpha_pos, layout.alpha_size) then
+            cp.Alpha = math.clamp((mp.y - layout.alpha_pos.y) / layout.alpha_size.y, 0, 1)
+            cp:SetValue(hsv_to_rgb(cp.Hue, cp.Saturation, cp.ValueHSV, cp.Alpha))
+        end
+    end
+
+    local ts_wm = render.get_text_size(Library.Watermark.Text)
+    local wm_size = vector2(ts_wm.x+16, 24)
+    if not Library.DraggingWatermark and mpressed and is_mouse_in_rect(Library.Watermark.Pos, wm_size) then
+        Library.DraggingWatermark = true; Library.DragOffset = mp:subtract(Library.Watermark.Pos)
+    end
+    if Library.DraggingWatermark then
+        if mdown then Library.Watermark.Pos = mp:subtract(Library.DragOffset)
+        else Library.DraggingWatermark = false end
+    end
+
+    local can_interact = not Library.ModalOpen and anim.State == "Idle"
+    Library.Tooltip = nil
+
+for _, window in ipairs(Library.Windows) do
+        if window.Visible then
+            window.Alpha = window.Alpha + (window.TargetAlpha - window.Alpha) * 0.07
+            local wa = window.Alpha
+            if wa < 0.01 then goto continue_window end
+
+            local glass = window.Glass
+            local glass_color = window.Glasscolor -- Grab the color attached to the window
+
+            -- Draw main window body
+            if glass then
+                glass_panel(window.Pos, window.Size, 8, wa, glass_color) -- Pass it here!
+            else
+                render.add_rect_filled(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.MainColor, wa), 8)
+                render.add_rect(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.OutlineColor, wa), 8, 1)
+            end
+
+            -- ... rest of your tab/element rendering ...
+
+            ::continue_window::
+        end
+    end
+
+    render_tooltip(1.0, global_glass, active_glass_color)
+    draw_watermark(global_glass, active_glass_color)
+end)
+
+local last_menu_press = 0
+hook.add("render", "menu_toggle_handler", function()
+    local menu_key_obj = Library.Options.menu_key
+    if menu_key_obj and menu_key_obj.Value and menu_key_obj.Value ~= "..." then
+        local vk = nil
+        for code, name in pairs(KEY_NAMES) do if name == menu_key_obj.Value then vk = code; break end end
+        if vk and input.is_key_pressed(vk) then
+            local now = get_tickcount()
+            if now - last_menu_press > 200 then
+                for _, w in ipairs(Library.Windows) do
+                    if w.TargetAlpha > 0.5 then w.TargetAlpha = 0; w.Visible = false
+                    else w.Visible = true; w.TargetAlpha = 1 end
+                end
+                last_menu_press = now
+            end
+        end
+    end
+end)
 
 -- ========== MAIN RENDER HOOK ==========
 hook.add("render", "auth_photon_render", function()
@@ -722,19 +863,21 @@ hook.add("render", "auth_photon_render", function()
                 Library.DraggingWindow = window; Library.DragOffset = mp:subtract(window.Pos)
             end
 
-            draw_shadow(window.Pos, window.Size, 12, wa)
-            if glass then
-                glass_panel(window.Pos, window.Size, 12, wa)
-            else
-                render.add_rect_filled(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.BackgroundColor, wa), 10)
-                render.add_rect(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.OutlineColor, wa), 10, 1)
-            end
+-- In your window render block (around line 362):
+draw_shadow(window.Pos, window.Size, 12, wa)
+if glass then
+    glass_panel(window.Pos, window.Size, 12, wa, window.Glasscolor, window.Glasstp)
+else
+    render.add_rect_filled(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.BackgroundColor, wa), 10)
+    render.add_rect(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.OutlineColor, wa), 10, 1)
+end
             render.add_text(window.Pos:add(vector2(14,10)), window.Title, apply_alpha(Library.FontColor, wa))
 
             local msp = window.Pos:add(vector2(12,36))
             local mss = vector2(window.Size.x-24, window.Size.y-48)
             if glass then
-                render.add_rect_filled(msp, msp:add(mss), color(0,0,0,0.10*wa), 8)
+    render.add_rect_filled(msp, msp:add(mss), color(0,0,0, (0.10 * (window.Glasstp or 0.1)) * wa), 8)
+
             else
                 render.add_rect_filled(msp, msp:add(mss), apply_alpha(Library.BackgroundColor, wa), 8)
             end
@@ -785,11 +928,11 @@ hook.add("render", "auth_photon_render", function()
 
                         draw_shadow(group_pos, group_size, 8, op * 0.5)
                         if glass then
-                            glass_panel(group_pos, group_size, 10, op)
-                        else
-                            render.add_rect_filled(group_pos, group_pos:add(group_size), apply_alpha(Library.MainColor, op), 8)
-                            render.add_rect(group_pos, group_pos:add(group_size), apply_alpha(Library.OutlineColor, op), 8, 1)
-                        end
+    glass_panel(gb_pos, gb_size, 8, wa, window.Glasscolor, window.Glasstp)
+else
+    render.add_rect_filled(gb_pos, gb_pos:add(gb_size), apply_alpha(Library.MainColor, wa), 6)
+    render.add_rect(gb_pos, gb_pos:add(gb_size), apply_alpha(Library.OutlineColor, wa), 6, 1)
+end
                         render.add_text(group_pos:add(vector2(10,8)), groupbox.Name, apply_alpha(Library.FontColor, op))
 
                         local element_y = 30
@@ -973,8 +1116,8 @@ hook.add("render", "auth_photon_render", function()
                             -- Layout: [label text] ... [color swatch] [brush icon button]
                             -- Clicking the brush icon toggles the picker open/closed.
                             elseif element.Type == "ColorPicker" then
-                                local row_w = group_size.x - 20
-                                local icon_btn_size = vector2(22, 22)  -- small square button
+                                local row_w = group_size.x - 40
+                                local icon_btn_size = vector2(40, 40)  -- small square button
                                 local swatch_w = 20
                                 local swatch_gap = 4
                                 -- total right side: swatch + gap + icon btn
@@ -1009,7 +1152,7 @@ hook.add("render", "auth_photon_render", function()
                                         lerp(0.12, Library.AccentColor.b * 0.4 + 0.12, element.HoverAnim),
                                         op)
                                 end
-                                render.add_rect_filled(icon_pos, icon_pos:add(icon_btn_size), btn_bg, 5)
+                                render.add_rect_filled(icon_pos, icon_pos:add(icon_btn_size), btn_bg, 20)
                                 -- accent ring when open
                                 if is_open then
                                     render.add_rect(icon_pos, icon_pos:add(icon_btn_size), apply_alpha(accent, 0.6*op), 5, 1)
