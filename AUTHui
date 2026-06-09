@@ -46,20 +46,18 @@ local Library = {
 }
 
 -- ========== GLASS HELPERS ==========
-local function glass_panel(pos, size, radius, alpha, tint, override_tp)
-    if not pos or not size then return end -- MUST be the first line to stop the crash
+-- ========== GLASS HELPERS ==========
+local function glass_panel(pos, size, radius, alpha)
+    if not pos or not size then return end -- Safely ignore if values are not ready
     
     local a = alpha or 1
-    local t_color = tint or color(0.55, 0.60, 0.90, 1)
-    local tp = override_tp or 0.06
-    
     -- deep dark layer
     render.add_rect_filled(pos, pos:add(size), color(0.05, 0.05, 0.10, 0.82 * a), radius)
     -- specular top shimmer
     render.add_rect_filled(pos, pos:add(vector2(size.x, math.min(size.y, 24))),
         color(1, 1, 1, 0.04 * a), radius)
-    -- frosted custom tint overlay using dynamic RGBA & custom transparency
-    render.add_rect_filled(pos, pos:add(size), color(t_color.r, t_color.g, t_color.b, tp * a), radius)
+    -- frosted blue-white tint overlay
+    render.add_rect_filled(pos, pos:add(size), color(0.55, 0.60, 0.90, 0.06 * a), radius)
     -- inner glow border (bright top/left)
     render.add_rect(pos, pos:add(size), color(1, 1, 1, 0.10 * a), radius, 1)
     -- outer subtle border
