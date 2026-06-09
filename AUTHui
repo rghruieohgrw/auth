@@ -931,12 +931,15 @@ end
                         for _,e in ipairs(groupbox.Elements) do current_y = current_y + e.Height end
                         local group_size = vector2(window.Size.x/2-20, current_y)
 
-                        draw_shadow(group_pos, group_size, 8, op * 0.5)
-                        if glass then
-    glass_panel(gb_pos, gb_size, 8, wa, window.Glasscolor, window.Glasstp)
+                        if not group_pos or not group_size then return end
+
+draw_shadow(group_pos, group_size, 8, op * 0.5)
+
+if glass then
+    glass_panel(group_pos, group_size, 8, wa, window.Glasscolor, window.Glasstp)
 else
-    render.add_rect_filled(gb_pos, gb_pos:add(gb_size), apply_alpha(Library.MainColor, wa), 6)
-    render.add_rect(gb_pos, gb_pos:add(gb_size), apply_alpha(Library.OutlineColor, wa), 6, 1)
+    render.add_rect_filled(group_pos, group_pos:add(group_size), apply_alpha(Library.MainColor, wa), 6)
+    render.add_rect(group_pos, group_pos:add(group_size), apply_alpha(Library.OutlineColor, wa), 6, 1)
 end
                         render.add_text(group_pos:add(vector2(10,8)), groupbox.Name, apply_alpha(Library.FontColor, op))
 
