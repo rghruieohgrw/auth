@@ -47,6 +47,8 @@ local Library = {
 
 -- ========== GLASS HELPERS ==========
 local function glass_panel(pos, size, radius, alpha, tint, override_tp)
+    if not pos or not size then return end -- Safely ignore if position or size is invalid/nil
+    
     local a = alpha or 1
     local t_color = tint or color(0.55, 0.60, 0.90, 1)
     local tp = override_tp or 0.06
