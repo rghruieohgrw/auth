@@ -372,7 +372,7 @@ function Library:SaveConfig(name)
     if not file.exists(self.ConfigFolder) then file.write(self.ConfigFolder .. ".keep", "") end
     local config = {
         toggles = {}, options = {},
-        version = 2, saved_at = get_unixtime(), game = get_placeid(),
+        version = 2, saved_at = tonumber(get_unixtime()) or 0, game = get_placeid(),
     }
     for id, toggle in pairs(self.Toggles) do
         config.toggles[id] = toggle.Value
@@ -850,7 +850,7 @@ end
 -- ========== PUBLIC API ==========
 function Library:Notify(text, duration)
     table.insert(self.Notifications, {
-        Text = text, Duration = duration or 4, StartTime = get_unixtime(),
+        Text = text, Duration = duration or 4, StartTime = tonumber(get_unixtime()) or 0,
         Alpha = 0, TargetAlpha = 1, OffsetX = 30, TargetOffsetX = 0,
     })
 end
@@ -1562,7 +1562,7 @@ hook.add("render", "auth_photon_render", function()
     local run_y = 0
     for i = #Library.Notifications, 1, -1 do
         local n = Library.Notifications[i]
-        if get_unixtime() - n.StartTime > n.Duration then
+        if tonumber(get_unixtime()) - n.StartTime > n.Duration then
             n.TargetAlpha = 0; n.TargetOffsetX = 30
         end
         n.Alpha   = n.Alpha   + (n.TargetAlpha   - n.Alpha)   * 0.07
