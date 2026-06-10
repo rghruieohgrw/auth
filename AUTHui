@@ -1383,38 +1383,41 @@ hook.add("render", "auth_photon_render", function()
                                         color(element.Value.r, element.Value.g, element.Value.b, op))
                                 end
                                 if not Library.DraggingWindow and mpressed
-                                    and is_mouse_in_rect(ico_pos, btn_sz) and can_interact
-                                then
-                                    element.Open = not element.Open
-                                    if element.Open then
-                                        local cp_width = 240
-                                        local cp_height = element.EnableAlpha and 200 or 170
-                                        local cp_x = ico_pos.x + btn_sz.x
-                                        local cp_y = ico_pos.y
-                                        if cp_x + cp_width > get_screen_size().x then cp_x = ico_pos.x - cp_width end
-                                        element.layout.picker_pos = vector2(cp_x, cp_y)
-                                        element.layout.picker_size = vector2(cp_width, cp_height)
-                                        element.layout.sv_pos = vector2(cp_x + 10, cp_y + 10)
-                                        element.layout.sv_size = vector2(180, 120)
-                                        element.layout.hue_pos = vector2(cp_x + 200, cp_y + 10)
-                                        element.layout.hue_size = vector2(20, 120)
-                                        if element.EnableAlpha then
-                                            element.layout.alpha_pos = vector2(cp_x + 200, cp_y + 140)
-                                            element.layout.alpha_size = vector2(20, 20)
-                                        end
-                                        Library.ActiveColorPicker = { obj = element, layout = element.layout }
-                                    else
-                                        Library.ActiveColorPicker = nil
-                                    end
-                                end
-                            end
-                            element_y = element_y + element.Height
-                        end
-                        if is_left then left_y = left_y + content_h + 8
-                        else right_y = right_y + content_h + 8 end
-                    end
-                end
-            end
+    and is_mouse_in_rect(ico_pos, btn_sz) and can_interact
+then
+    element.Open = not element.Open
+    if element.Open then
+        local cp_width = 240
+        local cp_height = element.EnableAlpha and 200 or 170
+        
+        -- FIXED: Convert to numbers safely
+        local ico_x = tonumber(ico_pos.x) or 0
+        local ico_y = tonumber(ico_pos.y) or 0
+        local btn_w = tonumber(btn_sz.x) or 22
+        local btn_h = tonumber(btn_sz.y) or 22
+        
+        local cp_x = ico_x + btn_w
+        local cp_y = ico_y + btn_h
+        
+        if cp_x + cp_width > get_screen_size().x then 
+            cp_x = ico_x - cp_width 
+        end
+        
+        element.layout.picker_pos = vector2(cp_x, cp_y)
+        element.layout.picker_size = vector2(cp_width, cp_height)
+        element.layout.sv_pos = vector2(cp_x + 10, cp_y + 10)
+        element.layout.sv_size = vector2(180, 120)
+        element.layout.hue_pos = vector2(cp_x + 200, cp_y + 10)
+        element.layout.hue_size = vector2(20, 120)
+        if element.EnableAlpha then
+            element.layout.alpha_pos = vector2(cp_x + 200, cp_y + 140)
+            element.layout.alpha_size = vector2(20, 20)
+        end
+        Library.ActiveColorPicker = { obj = element, layout = element.layout }
+    else
+        Library.ActiveColorPicker = nil
+    end
+end
             ::continue_window::
         end
     end
