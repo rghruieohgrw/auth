@@ -1,5 +1,6 @@
--- AUTHui - Photon UI Library (FIXED)
--- v3: Fixed string/number comparison errors
+-- AUTHui - Photon UI Library
+-- v3: GlassColor, Blur, GlassTransparency per-window; config uses file.list_folder/delete_file; compact color picker
+-- + Spotify mini-player (WebSocket relay, zero bridge file)
 
 local _players = game:get_service("Players")
 local _localname = _players and _players.local_player and _players.local_player.name or "unknown"
@@ -129,11 +130,6 @@ local function hsv_to_rgb(h, s, v, a)
     return color(r, g, b, a or 1)
 end
 
--- Safe vector math helper
-local function safe_vector2(x, y)
-    return vector2(tonumber(x) or 0, tonumber(y) or 0)
-end
-
 -- ========== GLASS PANEL ==========
 local function glass_panel(pos, size, radius, alpha)
     local a      = (alpha or 1)
@@ -159,7 +155,7 @@ local function glass_panel(pos, size, radius, alpha)
         math.max(radius - 1, 0), 1)
 end
 
--- ========== SPOTIFY MODULE (FIXED) ==========
+-- ========== SPOTIFY MODULE ==========
 
 local Spotify = {
     Enabled      = false,
@@ -222,22 +218,22 @@ function Spotify:Connect()
                         self.Track.is_playing = false
 
                     elseif data.type == "track" then
-                        -- FIXED: Convert all values to proper types
-                        self.Track.name       = tostring(data.name or "")
-                        self.Track.artist     = tostring(data.artist or "")
-                        self.Track.progress   = tonumber(data.progress) or 0
-                        self.Track.duration   = tonumber(data.duration) or 1
-                        self.Track.is_playing = data.is_playing == true
-                        self.Track.idle       = false
-                        
-                        -- Safe division
-                        local duration = self.Track.duration
-                        if duration and duration > 0 then
-                            self._rendered_progress = (self.Track.progress or 0) / duration
-                        else
-                            self._rendered_progress = 0
-                        end
-                        self._last_poll_ms    = get_tickcount()
+    self.Track.name       = tostring(data.name or "")
+    self.Track.artist     = tostring(data.artist or "")
+    self.Track.progress   = tonumber(data.progress) or 0  -- Convert to number
+    self.Track.duration   = tonumber(data.duration) or 1  -- Convert to number
+    self.Track.is_playing = data.is_playing == true
+    self.Track.idle       = false
+    
+    -- SAFE division
+    local duration = tonumber(self.Track.duration) or 1
+    if duration > 0 then
+        self._rendered_progress = (tonumber(self.Track.progress) or 0) / duration
+    else
+        self._rendered_progress = 0
+    end
+    self._last_poll_ms    = get_tickcount()
+
                         if data.changed then
                             self.AlbumTexture = nil
                             self:FetchArt(data.art_url or "")
@@ -248,6 +244,7 @@ function Spotify:Connect()
             wait(50)
         end
 
+        -- auto-reconnect if still enabled
         if self.Enabled then
             self.WS = nil
             wait(2000)
@@ -268,7 +265,7 @@ end
 function Spotify:TickProgress()
     if not self.Track.is_playing or self.Track.idle then return end
     
-    -- FIXED: Convert to numbers safely
+    -- SAFE: Convert all values to numbers
     local progress = tonumber(self.Track.progress) or 0
     local duration = tonumber(self.Track.duration) or 1
     local last_poll = tonumber(self._last_poll_ms) or 0
@@ -279,13 +276,7 @@ function Spotify:TickProgress()
     self._rendered_progress = math.min((progress + elapsed) / duration, 1)
 end
 
-local function spotify_format_ms(ms)
-    local num_ms = tonumber(ms) or 0
-    local s = math.floor(num_ms / 1000)
-    return string.format("%d:%02d", math.floor(s / 60), s % 60)
-end
-
--- Spotify mini-player render (FIXED)
+-- Spotify mini-player render (sits just below watermark)
 hook.add("render", "spotify_miniplayer", function()
     if not Spotify.Enabled then return end
     Spotify:TickProgress()
@@ -299,6 +290,7 @@ hook.add("render", "spotify_miniplayer", function()
     local art = 50
     local pad = 4
 
+    -- background — match watermark style
     draw_shadow(pos, sz, 8, 1)
     if Library._GlobalGlass then
         glass_panel(pos, sz, 8, 1)
@@ -307,6 +299,7 @@ hook.add("render", "spotify_miniplayer", function()
         render.add_rect(pos, pos:add(sz), color(0.13, 0.13, 0.18, 1), 8, 1)
     end
 
+    -- album art or placeholder
     local art_pos = pos:add(vector2(pad, pad))
     if Spotify.AlbumTexture then
         render.add_texture(Spotify.AlbumTexture,
@@ -314,6 +307,7 @@ hook.add("render", "spotify_miniplayer", function()
     else
         render.add_rect_filled(art_pos, art_pos:add(vector2(art, art)),
             color(0.12, 0.12, 0.16, 1), 4)
+        -- placeholder lines
         render.add_rect_filled(art_pos:add(vector2(14, 16)), art_pos:add(vector2(36, 19)), color(0.3, 0.3, 0.35, 1), 2)
         render.add_rect_filled(art_pos:add(vector2(14, 22)), art_pos:add(vector2(36, 25)), color(0.3, 0.3, 0.35, 1), 2)
         render.add_rect_filled(art_pos:add(vector2(14, 28)), art_pos:add(vector2(28, 31)), color(0.3, 0.3, 0.35, 1), 2)
@@ -326,41 +320,65 @@ hook.add("render", "spotify_miniplayer", function()
         render.add_text(vector2(tx, pos.y + 22),
             "Nothing playing", color(0.45, 0.45, 0.55, 1))
     else
+        -- track name
         render.add_text(vector2(tx, pos.y + 7),
             get_clipped_text(tostring(t.name) or "", text_w), color(0.95, 0.95, 1, 1))
+        -- artist
         render.add_text(vector2(tx, pos.y + 20),
             get_clipped_text(tostring(t.artist) or "", text_w), color(0.5, 0.5, 0.62, 1))
 
-        -- PROGRESS BAR - COMPLETELY FIXED
-        local bar_pos = vector2(tx, pos.y + 36)
-        local bar_w = tonumber(text_w) or 224
-        local progress = tonumber(Spotify._rendered_progress) or 0
-        local progress_width = math.max(0, bar_w * math.max(0, math.min(1, progress)))
-        
-        render.add_rect_filled(bar_pos, bar_pos:add(vector2(bar_w, 4)),
-            color(0.15, 0.15, 0.2, 1), 2)
-        render.add_rect_filled(bar_pos,
-            bar_pos:add(vector2(progress_width, 4)),
-            color(0.11, 0.73, 0.33, 1), 2)
+-- Add this debug code BEFORE the progress bar section
+if type(text_w) ~= "number" then
+    print("ERROR: text_w is", type(text_w), text_w)
+    text_w = 224  -- force to number
+end
+if type(Spotify._rendered_progress) ~= "number" then
+    print("ERROR: progress is", type(Spotify._rendered_progress), Spotify._rendered_progress)
+    Spotify._rendered_progress = 0  -- force to number
+end
 
-        -- TIMESTAMPS - FIXED
-        local duration_num = tonumber(t.duration) or 1
-        local progress_num = tonumber(Spotify._rendered_progress) or 0
-        local elapsed_ms = math.floor(progress_num * duration_num)
-        
-        render.add_text(vector2(tx, pos.y + 44),
-            spotify_format_ms(elapsed_ms), color(0.4, 0.4, 0.5, 1))
-        
-        local dur_str = spotify_format_ms(duration_num)
-        local dur_width = render.get_text_size(dur_str).x
+-- progress bar
+local bar_pos = vector2(tx, pos.y + 36)
+local bar_w = tonumber(text_w) or 224
+local progress = tonumber(Spotify._rendered_progress) or 0
+
+-- This is line 1570 - make sure both are numbers
+local progress_width = math.max(0, bar_w * progress)  -- THIS LINE
+
+-- progress bar - FIXED: convert to numbers
+local bar_pos  = vector2(tx, pos.y + 36)
+local bar_w    = tonumber(text_w) or 224
+local progress = tonumber(Spotify._rendered_progress) or 0
+
+-- Calculate progress width safely
+local progress_width = 0
+if bar_w and progress then
+    progress_width = math.max(0, bar_w * progress)
+end
+
+render.add_rect_filled(bar_pos, bar_pos:add(vector2(bar_w, 4)),
+    color(0.15, 0.15, 0.2, 1), 2)
+render.add_rect_filled(bar_pos,
+    bar_pos:add(vector2(progress_width, 4)),
+    color(0.11, 0.73, 0.33, 1), 2)
+
+        -- timestamps - FIXED: convert to numbers
+local duration_num = tonumber(t.duration) or 1
+local progress_num = tonumber(Spotify._rendered_progress) or 0
+local elapsed_ms = math.floor(progress_num * duration_num)
+render.add_text(vector2(tx, pos.y + 44),
+    spotify_format_ms(elapsed_ms), color(0.4, 0.4, 0.5, 1))
+local dur_str = spotify_format_ms(duration_num)
         render.add_text(
-            vector2(pos.x + sz.x - dur_width - pad, pos.y + 44),
+            vector2(pos.x + sz.x - render.get_text_size(dur_str).x - pad, pos.y + 44),
             dur_str, color(0.4, 0.4, 0.5, 1))
 
+        -- playing/paused dot
+        local is_playing = t.is_playing == true
         render.add_circle_filled(
             vector2(pos.x + sz.x - 8, pos.y + 8),
             3,
-            t.is_playing and color(0.11, 0.73, 0.33, 1) or color(0.35, 0.35, 0.42, 1),
+            is_playing and color(0.11, 0.73, 0.33, 1) or color(0.35, 0.35, 0.42, 1),
             8)
     end
 end)
@@ -393,7 +411,7 @@ function Library:SaveConfig(name)
     if not file.exists(self.ConfigFolder) then file.write(self.ConfigFolder .. ".keep", "") end
     local config = {
         toggles = {}, options = {},
-        version = 2, saved_at = tonumber(get_unixtime()) or 0, game = get_placeid(),
+        version = 2, saved_at = get_unixtime(), game = get_placeid(),
     }
     for id, toggle in pairs(self.Toggles) do
         config.toggles[id] = toggle.Value
@@ -839,6 +857,7 @@ function Library:CreateWindow(config)
                 table.insert(self.Elements, el); return el
             end
 
+            -- ── Spotify groupbox helper ──
             function groupbox:AddSpotifyToggle()
                 return self:AddToggle("spotify_enabled", {
                     Text    = "Mini Player",
@@ -870,7 +889,7 @@ end
 -- ========== PUBLIC API ==========
 function Library:Notify(text, duration)
     table.insert(self.Notifications, {
-        Text = text, Duration = duration or 4, StartTime = tonumber(get_unixtime()) or 0,
+        Text = text, Duration = duration or 4, StartTime = get_unixtime(),
         Alpha = 0, TargetAlpha = 1, OffsetX = 30, TargetOffsetX = 0,
     })
 end
@@ -878,6 +897,7 @@ function Library:SetWatermark(text) self.Watermark.Text = text; self.Watermark.V
 function Library:OpenWindow(window)  window.Visible = true;  window.TargetAlpha = 1 end
 function Library:CloseWindow(window) window.TargetAlpha = 0 end
 
+-- expose Spotify on Library for scripts that want direct access
 Library.Spotify = Spotify
 
 -- ========== TOOLTIP ==========
@@ -1035,7 +1055,7 @@ hook.add("render", "auth_photon_render", function()
     local can_interact = not Library.ModalOpen and anim.State == "Idle"
     Library.Tooltip = nil
 
-    -- ========== RENDER WINDOWS ==========
+    -- ========== WINDOWS ==========
     for _, window in ipairs(Library.Windows) do
         if window.Visible then
             window.Alpha = window.Alpha + (window.TargetAlpha - window.Alpha) * 0.07
@@ -1043,6 +1063,7 @@ hook.add("render", "auth_photon_render", function()
             if wa < 0.01 then goto continue_window end
 
             local glass = window.Glass
+
             local title_bar_size = vector2(window.Size.x, 34)
             if not Library.DraggingWindow and mpressed
                 and is_mouse_in_rect(window.Pos, title_bar_size) and not Library.ModalOpen
@@ -1388,199 +1409,308 @@ hook.add("render", "auth_photon_render", function()
                                         color(element.Value.r, element.Value.g, element.Value.b, op))
                                 end
                                 if not Library.DraggingWindow and mpressed
-    and is_mouse_in_rect(ico_pos, btn_sz) and can_interact
-then
-    element.Open = not element.Open
-    if element.Open then
-        local cp_width = 240
-        local cp_height = element.EnableAlpha and 200 or 170
-        
-        -- FIXED: Convert to numbers safely
-        local ico_x = tonumber(ico_pos.x) or 0
-        local ico_y = tonumber(ico_pos.y) or 0
-        local btn_w = tonumber(btn_sz.x) or 22
-        local btn_h = tonumber(btn_sz.y) or 22
-        
-        local cp_x = ico_x + btn_w
-        local cp_y = ico_y + btn_h
-        
-        if cp_x + cp_width > get_screen_size().x then 
-            cp_x = ico_x - cp_width 
+                                    and is_mouse_in_rect(ico_pos, btn_sz) and can_interact
+                                then
+                                    element.Open = not element.Open
+                                    Library.ActiveColorPicker = element.Open
+                                        and { obj = element, layout = element.layout }
+                                        or nil
+                                end
+
+                            elseif element.Type == "Divider" then
+                                local dy = ep.y + element.Height / 2
+                                render.add_line(vector2(ep.x, dy), vector2(ep.x + group_w - 20, dy),
+                                    apply_alpha(Library.OutlineColor, op), 1)
+
+                            elseif element.Type == "Label" then
+                                render.add_text(ep:add(vector2(0, 4)), element.Text, apply_alpha(Library.FontColor, op))
+                            end
+
+                            element_y = element_y + element.Height
+                        end
+
+                        if is_left then left_y = left_y + content_h + 12
+                        else right_y = right_y + content_h + 12 end
+                    end
+                end
+            end
         end
-        
-        element.layout.picker_pos = safe_vector2(cp_x, cp_y)
-        element.layout.picker_size = vector2(cp_width, cp_height)
-        element.layout.sv_pos = vector2(cp_x + 10, cp_y + 10)
-        element.layout.sv_size = vector2(180, 120)
-        element.layout.hue_pos = vector2(cp_x + 200, cp_y + 10)
-        element.layout.hue_size = vector2(20, 120)
-        if element.EnableAlpha then
-            element.layout.alpha_pos = vector2(cp_x + 200, cp_y + 140)
-            element.layout.alpha_size = vector2(20, 20)
-        end
-        Library.ActiveColorPicker = { obj = element, layout = element.layout }
-    else
-        Library.ActiveColorPicker = nil
+        ::continue_window::
     end
-end
-            ::continue_window::
+
+    -- ========== DROPDOWN LIST ==========
+    if Library.OpenedDropdown then
+        local e        = Library.OpenedDropdown
+        local list_pos = e.Layout.pos:add(vector2(0, e.Layout.size.y + 2))
+        local list_h   = math.min(#e.Values, 6) * 22 + 4
+        local list_sz  = vector2(e.Layout.size.x, list_h)
+        e.Layout.list_pos  = list_pos
+        e.Layout.list_size = list_sz
+        draw_shadow(list_pos, list_sz, 6, 1)
+        if Library._GlobalGlass then
+            glass_panel(list_pos, list_sz, 8, 1)
+        else
+            render.add_rect_filled(list_pos, list_pos:add(list_sz), Library.MainColor, 6)
+            render.add_rect(list_pos, list_pos:add(list_sz), Library.OutlineColor, 6, 1)
+        end
+        local item_y = 2
+        for _, value in ipairs(e.Values) do
+            local ip  = list_pos:add(vector2(1, item_y))
+            local isz = vector2(list_sz.x - 2, 22)
+            local sel = (e.Multi and e.Value[value]) or (e.Value == value)
+            local tc  = sel and accent or Library.FontColor
+            if is_mouse_in_rect(ip, isz) then
+                render.add_rect_filled(ip, ip:add(isz), apply_alpha(accent, 0.18), 4)
+                tc = accent
+                if mpressed then
+                    if e.Multi then
+                        e.Value[value] = not e.Value[value]; e:SetValue(e.Value)
+                    else
+                        e:SetValue(value); e.Open = false; Library.OpenedDropdown = nil
+                    end
+                end
+            end
+            render.add_text(ip:add(vector2(8, 3)), value, tc)
+            item_y = item_y + 22
+        end
+    end
+
+    -- ========== COLOR PICKER PANEL ==========
+    if Library.ActiveColorPicker then
+        local e    = Library.ActiveColorPicker.obj
+        local pad  = 10
+        local sv_d = 150
+        local bw   = 14; local br = 5; local bg_gap = 6
+        local n_bars = e.EnableAlpha and 2 or 1
+        local bars_x = pad + sv_d + pad
+        local p_w    = bars_x + bw * n_bars + bg_gap * (n_bars - 1) + pad
+        local p_h    = pad + sv_d + pad
+        local scr    = get_screen_size()
+        local p_pos  = e.layout.pos:add(vector2(0, e.layout.size.y + 6))
+        if p_pos.x + p_w > scr.x - 4 then p_pos = vector2(scr.x - p_w - 4, p_pos.y) end
+        if p_pos.y + p_h > scr.y - 4 then p_pos = vector2(p_pos.x, e.layout.pos.y - p_h - 6) end
+        e.layout.picker_pos  = p_pos
+        e.layout.picker_size = vector2(p_w, p_h)
+        draw_shadow(p_pos, vector2(p_w, p_h), 10, 1)
+        if Library._GlobalGlass then
+            glass_panel(p_pos, vector2(p_w, p_h), 12, 1)
+        else
+            render.add_rect_filled(p_pos, p_pos:add(vector2(p_w, p_h)), Library.MainColor, 10)
+            render.add_rect(p_pos, p_pos:add(vector2(p_w, p_h)), Library.OutlineColor, 10, 1)
+        end
+        local sv_pos  = p_pos:add(vector2(pad, pad))
+        local sv_size = vector2(sv_d, sv_d)
+        e.layout.sv_pos  = sv_pos
+        e.layout.sv_size = sv_size
+        local hue_rgb = hsv_to_rgb(e.Hue, 1, 1)
+        render.add_rect_filled(sv_pos, sv_pos:add(sv_size), color(1, 1, 1, 1), br)
+        for i = 0, sv_d - 1 do
+            render.add_line(sv_pos:add(vector2(i, 0)), sv_pos:add(vector2(i, sv_d)),
+                color(hue_rgb.r, hue_rgb.g, hue_rgb.b, i / (sv_d - 1)), 1)
+        end
+        for i = 0, sv_d - 1 do
+            render.add_line(sv_pos:add(vector2(0, i)), sv_pos:add(vector2(sv_d, i)),
+                color(0, 0, 0, i / (sv_d - 1)), 1)
+        end
+        render.add_rect(sv_pos, sv_pos:add(sv_size), Library.OutlineColor, br, 1)
+        local cx  = sv_pos.x + sv_size.x * e.Saturation
+        local cy  = sv_pos.y + sv_size.y * (1 - e.ValueHSV)
+        local rim = e.ValueHSV > 0.4 and color(0, 0, 0, 1) or color(1, 1, 1, 1)
+        render.add_circle(vector2(cx, cy), 6, color(0, 0, 0, 0.5), 1)
+        render.add_circle(vector2(cx, cy), 5, rim, 1)
+        render.add_circle_filled(vector2(cx, cy), 3, hsv_to_rgb(e.Hue, e.Saturation, e.ValueHSV, 1))
+        local hue_pos  = p_pos:add(vector2(bars_x, pad))
+        local hue_size = vector2(bw, sv_d)
+        e.layout.hue_pos  = hue_pos
+        e.layout.hue_size = hue_size
+        for i = 0, sv_d - 1 do
+            render.add_line(hue_pos:add(vector2(0, i)), hue_pos:add(vector2(bw, i)),
+                hsv_to_rgb(i / (sv_d - 1), 1, 1), 1)
+        end
+        render.add_rect(hue_pos, hue_pos:add(hue_size), Library.OutlineColor, br, 1)
+        local hcy = hue_pos.y + hue_size.y * e.Hue
+        local th  = 6
+        render.add_rect_filled(vector2(hue_pos.x - 2, hcy - th/2), vector2(hue_pos.x + bw + 2, hcy + th/2), color(1,1,1,1), 3)
+        render.add_rect(vector2(hue_pos.x-2, hcy-th/2), vector2(hue_pos.x+bw+2, hcy+th/2), color(0,0,0,0.4), 3, 1)
+        if e.EnableAlpha then
+            local a_pos  = p_pos:add(vector2(bars_x + bw + bg_gap, pad))
+            local a_size = vector2(bw, sv_d)
+            e.layout.alpha_pos  = a_pos
+            e.layout.alpha_size = a_size
+            draw_checkerboard(a_pos, a_size, 4)
+            local base_rgb = hsv_to_rgb(e.Hue, e.Saturation, e.ValueHSV)
+            for i = 0, sv_d - 1 do
+                render.add_line(a_pos:add(vector2(0, i)), a_pos:add(vector2(bw, i)),
+                    color(base_rgb.r, base_rgb.g, base_rgb.b, i / (sv_d - 1)), 1)
+            end
+            render.add_rect(a_pos, a_pos:add(a_size), Library.OutlineColor, br, 1)
+            local acy = a_pos.y + a_size.y * e.Alpha
+            render.add_rect_filled(vector2(a_pos.x-2, acy-th/2), vector2(a_pos.x+bw+2, acy+th/2), color(1,1,1,1), 3)
+            render.add_rect(vector2(a_pos.x-2, acy-th/2), vector2(a_pos.x+bw+2, acy+th/2), color(0,0,0,0.4), 3, 1)
+        end
+    end
+
+    -- ========== RIGHT-CLICK MENU ==========
+    if Library.RightClickMenu then
+        local rcm     = Library.RightClickMenu
+        local options = { "Always", "Hold", "Toggle" }
+        local scr     = get_screen_size()
+        local rp      = vector2(
+            math.min(rcm.pos.x, scr.x - rcm.size.x - 4),
+            math.min(rcm.pos.y, scr.y - rcm.size.y - 4))
+        rcm.Alpha = rcm.Alpha + (1 - rcm.Alpha) * 0.12
+        draw_shadow(rp, rcm.size, 8, rcm.Alpha)
+        if Library._GlobalGlass then
+            glass_panel(rp, rcm.size, 9, rcm.Alpha)
+        else
+            render.add_rect_filled(rp, rp:add(rcm.size), apply_alpha(Library.MainColor, rcm.Alpha), 7)
+        end
+        local pad = 4; local item_h = 24
+        for i, opt in ipairs(options) do
+            local ip  = rp:add(vector2(pad, pad + (i - 1) * item_h))
+            local isz = vector2(rcm.size.x - pad * 2, item_h)
+            local sel = rcm.obj.Mode == opt or (opt == "Always" and not rcm.obj.Mode)
+            local hov = is_mouse_in_rect(ip, isz)
+            if hov or sel then
+                render.add_rect_filled(ip, ip:add(isz),
+                    apply_alpha(accent, (sel and 0.18 or 0.10) * rcm.Alpha), 4)
+            end
+            local tc = (sel or hov) and apply_alpha(accent, rcm.Alpha) or apply_alpha(Library.FontColor, rcm.Alpha * 0.7)
+            render.add_text(ip:add(vector2(8, 4)), opt, tc)
+            if sel then
+                render.add_rect_filled(
+                    ip:add(vector2(isz.x - 8, item_h / 2 - 2)),
+                    ip:add(vector2(isz.x - 4, item_h / 2 + 2)),
+                    apply_alpha(accent, rcm.Alpha), 2)
+            end
+            if mpressed and hov then
+                rcm.obj.Mode = opt == "Always" and nil or opt
+                Library.RightClickMenu = nil
+            end
+        end
+    end
+
+    -- ========== NOTIFICATIONS ==========
+    local scr_w, scr_h = get_screen_size().x, get_screen_size().y
+    local nx, ny, vdir = 20, 50, 1
+    if Library.NotificationPosition == "Top Right"    then nx = scr_w - 290; ny = 50
+    elseif Library.NotificationPosition == "Top Left"     then nx = 20;       ny = 50
+    elseif Library.NotificationPosition == "Bottom Right" then nx = scr_w - 290; ny = scr_h - 60; vdir = -1
+    elseif Library.NotificationPosition == "Bottom Left"  then nx = 20; ny = scr_h - 60; vdir = -1 end
+
+    local run_y = 0
+    for i = #Library.Notifications, 1, -1 do
+        local n = Library.Notifications[i]
+        if get_unixtime() - n.StartTime > n.Duration then
+            n.TargetAlpha = 0; n.TargetOffsetX = 30
+        end
+        n.Alpha   = n.Alpha   + (n.TargetAlpha   - n.Alpha)   * 0.07
+        n.OffsetX = n.OffsetX + (n.TargetOffsetX - n.OffsetX) * 0.07
+        if n.TargetAlpha == 0 and n.Alpha < 0.01 then
+            table.remove(Library.Notifications, i)
+        else
+            local nsz  = vector2(render.get_text_size(n.Text).x + 20, 26)
+            local cur_y = ny + vdir * run_y
+            if vdir == -1 then cur_y = cur_y - nsz.y end
+            local sign = (Library.NotificationPosition == "Top Right"
+                       or Library.NotificationPosition == "Bottom Right") and 1 or -1
+            local np = vector2(nx + sign * n.OffsetX, cur_y)
+            draw_shadow(np, nsz, 6, n.Alpha)
+            if Library._GlobalGlass then
+                glass_panel(np, nsz, 8, n.Alpha)
+            else
+                render.add_rect_filled(np, np:add(nsz),
+                    color(Library.MainColor.r, Library.MainColor.g, Library.MainColor.b, n.Alpha), 6)
+                render.add_rect(np, np:add(nsz),
+                    color(Library.OutlineColor.r, Library.OutlineColor.g, Library.OutlineColor.b, n.Alpha), 6, 1)
+            end
+            render.add_rect_filled(np:add(vector2(0, 3)), np:add(vector2(2, nsz.y - 3)),
+                color(Library.AccentColor.r, Library.AccentColor.g, Library.AccentColor.b, n.Alpha), 2)
+            render.add_text(np:add(vector2(10, 5)), n.Text,
+                color(Library.FontColor.r, Library.FontColor.g, Library.FontColor.b, n.Alpha))
+            run_y = run_y + nsz.y + 6
         end
     end
 
     draw_watermark()
-    render_tooltip(Library.TooltipAlpha)
-
-    -- Draw notifications
-    for i, notif in ipairs(Library.Notifications) do
-        local elapsed = (tonumber(get_unixtime()) or 0) - (notif.StartTime or 0)
-        local remain = (notif.Duration or 4) - elapsed
-        if remain <= 0 then
-            table.remove(Library.Notifications, i)
-        else
-            local fade = math.min(1, remain * 2, elapsed * 4)
-            notif.Alpha = notif.Alpha + ((remain < 0.5 and 0 or 1) - notif.Alpha) * 0.1
-            notif.OffsetX = notif.OffsetX + ((remain < 0.5 and 30 or 0) - notif.OffsetX) * 0.1
-            local ts = render.get_text_size(notif.Text)
-            local nw = ts.x + 24
-            local nh = 32
-            local nx = get_screen_size().x - nw - 10 - notif.OffsetX
-            local ny = 10 + (i - 1) * (nh + 5)
-            draw_shadow(vector2(nx, ny), vector2(nw, nh), 8, notif.Alpha)
-            if Library._GlobalGlass then
-                glass_panel(vector2(nx, ny), vector2(nw, nh), 8, notif.Alpha)
-            else
-                render.add_rect_filled(vector2(nx, ny), vector2(nx + nw, ny + nh),
-                    apply_alpha(Library.MainColor, notif.Alpha), 6)
-                render.add_rect(vector2(nx, ny), vector2(nx + nw, ny + nh),
-                    apply_alpha(Library.OutlineColor, notif.Alpha), 6, 1)
-            end
-            render.add_text(vector2(nx + 12, ny + 8), notif.Text, apply_alpha(Library.FontColor, notif.Alpha))
-        end
-    end
-
-    -- Draw color picker if open
-    if Library.ActiveColorPicker then
-        local cp = Library.ActiveColorPicker.obj
-        local layout = Library.ActiveColorPicker.layout
-        render.add_rect_filled(layout.picker_pos, layout.picker_pos:add(layout.picker_size),
-            apply_alpha(Library.BackgroundColor, 0.95), 8)
-        render.add_rect(layout.picker_pos, layout.picker_pos:add(layout.picker_size),
-            apply_alpha(Library.OutlineColor, 1), 8, 1)
-        
-        -- SV picker
-        for x = 0, layout.sv_size.x - 1, 4 do
-            for y = 0, layout.sv_size.y - 1, 4 do
-                local s = x / layout.sv_size.x
-                local v = 1 - (y / layout.sv_size.y)
-                local col = hsv_to_rgb(cp.Hue, s, v, 1)
-                render.add_rect_filled(
-                    layout.sv_pos:add(vector2(x, y)),
-                    layout.sv_pos:add(vector2(x + 4, y + 4)),
-                    col, 0)
-            end
-        end
-local sel_x = (tonumber(layout.sv_pos.x) or 0) + (tonumber(cp.Saturation) or 0) * (tonumber(layout.sv_size.x) or 180)
-local sel_y = (tonumber(layout.sv_pos.y) or 0) + (1 - (tonumber(cp.ValueHSV) or 0)) * (tonumber(layout.sv_size.y) or 120)
-        render.add_circle(vector2(sel_x, sel_y), 6, color(1, 1, 1, 1), 1)
-        render.add_circle(vector2(sel_x, sel_y), 4, color(0, 0, 0, 1), 1)
-        
-        -- Hue picker
-        for y = 0, layout.hue_size.y - 1, 2 do
-            local hue = y / layout.hue_size.y
-            local col = hsv_to_rgb(hue, 1, 1, 1)
-            render.add_rect_filled(
-                layout.hue_pos:add(vector2(0, y)),
-                layout.hue_pos:add(vector2(layout.hue_size.x, y + 2)),
-                col, 0)
-        end
-local hue_y = (tonumber(layout.hue_pos.y) or 0) + (tonumber(cp.Hue) or 0) * (tonumber(layout.hue_size.y) or 120)
-        render.add_rect_filled(
-            vector2(layout.hue_pos.x - 3, hue_y - 2),
-            vector2(layout.hue_pos.x + layout.hue_size.x + 3, hue_y + 2),
-            color(1, 1, 1, 1), 2)
-        
-        -- Alpha picker if enabled
-        if cp.EnableAlpha then
-            draw_checkerboard(layout.alpha_pos, layout.alpha_size, 8)
-            local alpha_col = hsv_to_rgb(cp.Hue, cp.Saturation, cp.ValueHSV, cp.Alpha)
-            render.add_rect_filled(layout.alpha_pos, layout.alpha_pos:add(layout.alpha_size), alpha_col, 0)
-            local alpha_y = (tonumber(layout.alpha_pos.y) or 0) + (tonumber(cp.Alpha) or 0) * (tonumber(layout.alpha_size.y) or 20)
-            render.add_rect_filled(
-                vector2(layout.alpha_pos.x - 3, alpha_y - 2),
-                vector2(layout.alpha_pos.x + layout.alpha_size.x + 3, alpha_y + 2),
-                color(1, 1, 1, 1), 2)
-        end
-    end
-
-    -- Draw right click menu
-    if Library.RightClickMenu then
-        local rcm = Library.RightClickMenu
-        rcm.Alpha = math.min(1, (rcm.Alpha or 0) + 0.1)
-        draw_shadow(rcm.pos, rcm.size, 6, rcm.Alpha)
-        render.add_rect_filled(rcm.pos, rcm.pos:add(rcm.size),
-            apply_alpha(Library.MainColor, rcm.Alpha), 6)
-        render.add_rect(rcm.pos, rcm.pos:add(rcm.size),
-            apply_alpha(Library.OutlineColor, rcm.Alpha), 6, 1)
-        
-        local y = 0
-        local options = {
-            { text = "Hold Mode", func = function() if rcm.obj then rcm.obj.Mode = "Hold"; rcm.obj:SetValue(rcm.obj.Value) end end },
-            { text = "Toggle Mode", func = function() if rcm.obj then rcm.obj.Mode = "Toggle"; rcm.obj.Active = false; rcm.obj:SetValue(rcm.obj.Value) end end },
-            { text = "Clear Key", func = function() if rcm.obj then rcm.obj:SetValue("...") end end },
-        }
-        for _, opt in ipairs(options) do
-            local opt_pos = rcm.pos:add(vector2(4, y))
-            local opt_size = vector2(rcm.size.x - 8, 24)
-            if is_mouse_in_rect(opt_pos, opt_size) then
-                render.add_rect_filled(opt_pos, opt_pos:add(opt_size),
-                    apply_alpha(Library.AccentColor, 0.2 * rcm.Alpha), 4)
-                if mpressed then
-                    opt.func()
-                    Library.RightClickMenu = nil
-                end
-            end
-            render.add_text(opt_pos:add(vector2(8, 4)), opt.text,
-                apply_alpha(Library.FontColor, rcm.Alpha))
-            y = y + 24
-        end
-    end
-
-    -- Handle key picking
-    if Library.ActiveKeyPicker then
-        local kp = Library.ActiveKeyPicker.obj
-        for vk, name in pairs(KEY_NAMES) do
-            if input.is_key_pressed(vk) then
-                kp:SetValue(name)
-                kp.Picking = false
-                Library.ActiveKeyPicker = nil
-                break
-            end
-        end
-    end
-
-    -- Handle input
-    if Library.ActiveInput then
-        local input_field = Library.ActiveInput
-        for i = 0x30, 0x5A do
-            if input.is_key_pressed(i) then
-                local c = input.is_key_down(0x10) and (CHAR_MAP_SHIFT[i] or CHAR_MAP_NORMAL[i]) or CHAR_MAP_NORMAL[i]
-                if c then input_field.Value = input_field.Value .. c end
-                if input_field.Callback then input_field.Callback(input_field.Value) end
-            end
-        end
-        if input.is_key_pressed(0x08) then
-            input_field.Value = string.sub(input_field.Value, 1, -2)
-            if input_field.Callback then input_field.Callback(input_field.Value) end
-        end
-        if input.is_key_pressed(0x20) then
-            input_field.Value = input_field.Value .. " "
-            if input_field.Callback then input_field.Callback(input_field.Value) end
-        end
-        if input.is_key_pressed(0x0D) then
-            Library.ActiveInput = nil
-        end
-    end
+    local tt_target  = Library.Tooltip and 1 or 0
+    Library.TooltipAlpha = Library.TooltipAlpha + (tt_target - Library.TooltipAlpha) * 0.07
+    if anim.State == "Idle" then render_tooltip(Library.TooltipAlpha) end
 end)
 
--- Return the library
+-- ========== KEY HANDLERS ==========
+hook.add("init", "auth_key_handler_init", function()
+    hook.add("render", "key_picker_capture", function()
+        if not Library.ActiveKeyPicker then return end
+        for vk, name in pairs(KEY_NAMES) do
+            if input.is_key_pressed(vk) then
+                Library.ActiveKeyPicker.obj:SetValue(name)
+                Library.ActiveKeyPicker.obj.Picking = false
+                Library.ActiveKeyPicker = nil
+                Library:Notify("Key bound: " .. name, 2)
+                return
+            end
+        end
+    end)
+
+    hook.add("render", "toggle_keys_handler", function()
+        for _, opt in pairs(Library.Options) do
+            if opt.Type == "KeyPicker" and opt.Mode == "Toggle"
+                and opt.Value and opt.Value ~= "..."
+            then
+                local vk
+                for code, name in pairs(KEY_NAMES) do
+                    if name == opt.Value then vk = code; break end
+                end
+                if vk and input.is_key_pressed(vk) then
+                    opt.Active = not opt.Active
+                    if opt.Callback then opt.Callback(opt.Active) end
+                    if opt.OnChangedFunc then opt.OnChangedFunc(opt.Active) end
+                end
+            end
+        end
+    end)
+
+    hook.add("render", "text_input_handler", function()
+        if not Library.ActiveInput then return end
+        for vk, char in pairs(CHAR_MAP_NORMAL) do
+            if input.is_key_pressed(vk) then
+                if vk == 0x08 then
+                    local v = Library.ActiveInput.Value
+                    if #v > 0 then Library.ActiveInput:SetValue(string.sub(v, 1, -2)) end
+                elseif vk == 0x0D or vk == 0x1B then
+                    Library.ActiveInput = nil
+                else
+                    local shift = input.key_down(0x10)
+                    local ch = (shift and CHAR_MAP_SHIFT[vk]) or char
+                    if ch then Library.ActiveInput:SetValue(Library.ActiveInput.Value .. ch) end
+                end
+                return
+            end
+        end
+    end)
+
+    local last_menu_press = 0
+    hook.add("render", "menu_toggle_handler", function()
+        local mk = Library.Options.menu_key
+        if not mk or not mk.Value or mk.Value == "..." then return end
+        local vk
+        for code, name in pairs(KEY_NAMES) do if name == mk.Value then vk = code; break end end
+        if vk and input.is_key_pressed(vk) then
+            local now = get_tickcount()
+            if now - last_menu_press > 200 then
+                for _, w in ipairs(Library.Windows) do
+                    if w.TargetAlpha > 0.5 then w.TargetAlpha = 0; w.Visible = false
+                    else w.Visible = true; w.TargetAlpha = 1 end
+                end
+                last_menu_press = now
+            end
+        end
+    end)
+end)
+
+Library.Options.menu_key = Library.Options.menu_key or { Value = "Insert", Mode = "Toggle" }
+
+_G.Library = Library
+_G.Spotify = Spotify
 return Library
