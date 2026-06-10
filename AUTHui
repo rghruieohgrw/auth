@@ -129,6 +129,11 @@ local function hsv_to_rgb(h, s, v, a)
     return color(r, g, b, a or 1)
 end
 
+-- Safe vector math helper
+local function safe_vector2(x, y)
+    return vector2(tonumber(x) or 0, tonumber(y) or 0)
+end
+
 -- ========== GLASS PANEL ==========
 local function glass_panel(pos, size, radius, alpha)
     local a      = (alpha or 1)
@@ -1403,7 +1408,7 @@ then
             cp_x = ico_x - cp_width 
         end
         
-        element.layout.picker_pos = vector2(cp_x, cp_y)
+        element.layout.picker_pos = safe_vector2(cp_x, cp_y)
         element.layout.picker_size = vector2(cp_width, cp_height)
         element.layout.sv_pos = vector2(cp_x + 10, cp_y + 10)
         element.layout.sv_size = vector2(180, 120)
@@ -1474,8 +1479,8 @@ end
                     col, 0)
             end
         end
-        local sel_x = layout.sv_pos.x + cp.Saturation * layout.sv_size.x
-        local sel_y = layout.sv_pos.y + (1 - cp.ValueHSV) * layout.sv_size.y
+local sel_x = (tonumber(layout.sv_pos.x) or 0) + (tonumber(cp.Saturation) or 0) * (tonumber(layout.sv_size.x) or 180)
+local sel_y = (tonumber(layout.sv_pos.y) or 0) + (1 - (tonumber(cp.ValueHSV) or 0)) * (tonumber(layout.sv_size.y) or 120)
         render.add_circle(vector2(sel_x, sel_y), 6, color(1, 1, 1, 1), 1)
         render.add_circle(vector2(sel_x, sel_y), 4, color(0, 0, 0, 1), 1)
         
@@ -1488,7 +1493,7 @@ end
                 layout.hue_pos:add(vector2(layout.hue_size.x, y + 2)),
                 col, 0)
         end
-        local hue_y = layout.hue_pos.y + cp.Hue * layout.hue_size.y
+local hue_y = (tonumber(layout.hue_pos.y) or 0) + (tonumber(cp.Hue) or 0) * (tonumber(layout.hue_size.y) or 120)
         render.add_rect_filled(
             vector2(layout.hue_pos.x - 3, hue_y - 2),
             vector2(layout.hue_pos.x + layout.hue_size.x + 3, hue_y + 2),
@@ -1499,7 +1504,7 @@ end
             draw_checkerboard(layout.alpha_pos, layout.alpha_size, 8)
             local alpha_col = hsv_to_rgb(cp.Hue, cp.Saturation, cp.ValueHSV, cp.Alpha)
             render.add_rect_filled(layout.alpha_pos, layout.alpha_pos:add(layout.alpha_size), alpha_col, 0)
-            local alpha_y = layout.alpha_pos.y + cp.Alpha * layout.alpha_size.y
+            local alpha_y = (tonumber(layout.alpha_pos.y) or 0) + (tonumber(cp.Alpha) or 0) * (tonumber(layout.alpha_size.y) or 20)
             render.add_rect_filled(
                 vector2(layout.alpha_pos.x - 3, alpha_y - 2),
                 vector2(layout.alpha_pos.x + layout.alpha_size.x + 3, alpha_y + 2),
