@@ -1,0 +1,405 @@
+--[[
+    Spotify Mini-Player for Photon Executor
+    Fully compatible with Photon API
+]]
+
+local Spotify = {
+    Enabled = false,
+    WS = nil,
+    Track = {
+        name = "",
+        artist = "",
+        progress = 0,
+        duration = 1,
+        is_playing = false,
+        idle = true,
+    },
+    AlbumTexture = nil,
+    LastArtUrl = "",
+    WORKER_URL = "wss://photon.photon-player.workers.dev/ws",
+    AUTH_URL = "https://photon.photon-player.workers.dev/auth",
+    ART_PATH = "photon_spotify_art.jpg",
+    _last_poll_ms = 0,
+    _rendered_progress = 0,
+    _position_x = 15,
+    _position_y = 100,
+    _drag = { active = false, offset_x = 0, offset_y = 0 },
+}
+
+-- Safe number conversion
+local function safe_num(val, default)
+    local num = tonumber(val)
+    if num == nil then return default or 0 end
+    return num
+end
+
+-- Format milliseconds to MM:SS
+local function format_time(ms)
+    local num_ms = safe_num(ms, 0)
+    local seconds = math.floor(num_ms / 1000)
+    local minutes = math.floor(seconds / 60)
+    local remain = seconds % 60
+    return string.format("%d:%02d", minutes, remain)
+end
+
+-- Download album art
+function Spotify:FetchArt(url)
+    if not url or url == "" or url == self.LastArtUrl then return end
+    self.LastArtUrl = url
+    
+    -- Try to load cached art first
+    if file.exists(self.ART_PATH) then
+        local tex = render.load_texture(self.ART_PATH)
+        if tex and tex.id then
+            self.AlbumTexture = tex.id
+            return
+        end
+    end
+    
+    -- Download new art
+    http.get(url, function(body, status)
+        if status == 200 and body and #body > 0 then
+            file.overwrite(self.ART_PATH, body, "binary")
+            local tex = render.load_texture(self.ART_PATH)
+            if tex and tex.id then
+                self.AlbumTexture = tex.id
+            end
+        end
+    end)
+end
+
+-- Connect to WebSocket
+function Spotify:Connect()
+    if self.WS and self.WS:is_connected() then return true end
+    
+    local hwid = get_hwid()
+    local ws = websocket.connect(self.WORKER_URL .. "?hwid=" .. hwid)
+    
+    if not ws then
+        print("[Spotify] Failed to connect")
+        return false
+    end
+    
+    self.WS = ws
+    print("[Spotify] Connected! Waiting for auth...")
+    
+    -- Message loop
+    spawn(function()
+        while self.Enabled and self.WS and self.WS:is_connected() do
+            local msg = self.WS:recv()
+            if msg then
+                local success, data = pcall(JSON_to_table, msg)
+                if success and data then
+                    if data.type == "error" and data.message == "not_authed" then
+                        local auth_url = self.AUTH_URL .. "?hwid=" .. hwid
+                        input.setclipboard(auth_url)
+                        print("[Spotify] Auth URL copied to clipboard!")
+                        print("[Spotify] Open in browser: " .. auth_url)
+                        
+                    elseif data.type == "idle" then
+                        self.Track.idle = true
+                        self.Track.is_playing = false
+                        self._rendered_progress = 0
+                        
+                    elseif data.type == "track" then
+                        -- Safe conversion of all values
+                        self.Track.name = tostring(data.name or "")
+                        self.Track.artist = tostring(data.artist or "")
+                        self.Track.progress = safe_num(data.progress, 0)
+                        self.Track.duration = safe_num(data.duration, 1)
+                        self.Track.is_playing = data.is_playing == true
+                        self.Track.idle = false
+                        
+                        if self.Track.duration > 0 then
+                            self._rendered_progress = self.Track.progress / self.Track.duration
+                        else
+                            self._rendered_progress = 0
+                        end
+                        
+                        self._last_poll_ms = get_tickcount()
+                        
+                        if data.changed and data.art_url then
+                            self.AlbumTexture = nil
+                            self:FetchArt(data.art_url)
+                        end
+                        
+                        print(string.format("[Spotify] ♪ %s - %s", self.Track.name, self.Track.artist))
+                    end
+                end
+            end
+            wait(50) -- 50ms = 0.05 seconds
+        end
+        
+        -- Auto-reconnect if still enabled
+        if self.Enabled then
+            self.WS = nil
+            wait(3000)
+            self:Connect()
+        end
+    end)
+    
+    return true
+end
+
+-- Update progress animation
+function Spotify:UpdateProgress()
+    if not self.Track.is_playing or self.Track.idle then return end
+    
+    local elapsed = get_tickcount() - (self._last_poll_ms or 0)
+    local progress = self.Track.progress or 0
+    local duration = self.Track.duration or 1
+    
+    if duration > 0 then
+        self._rendered_progress = math.min((progress + elapsed) / duration, 1)
+    else
+        self._rendered_progress = 0
+    end
+end
+
+-- Disconnect
+function Spotify:Disconnect()
+    self.Enabled = false
+    if self.WS then
+        self.WS:close()
+        self.WS = nil
+    end
+    print("[Spotify] Disconnected")
+end
+
+-- Toggle on/off
+function Spotify:Toggle()
+    self.Enabled = not self.Enabled
+    if self.Enabled then
+        self:Connect()
+    else
+        self:Disconnect()
+    end
+    return self.Enabled
+end
+
+-- Set position
+function Spotify:SetPosition(x, y)
+    self._position_x = safe_num(x, 15)
+    self._position_y = safe_num(y, 100)
+end
+
+-- Draw the mini-player (call this in render hook)
+function Spotify:Draw()
+    if not self.Enabled then return end
+    
+    self:UpdateProgress()
+    
+    local t = self.Track
+    local pos = vector2(self._position_x, self._position_y)
+    local size = vector2(260, 70)
+    local art_size = 54
+    local pad = 6
+    
+    -- Draw shadow
+    for i = 1, 6 do
+        local spread = i * 2
+        local alpha = (1 - i / 6) * 0.12
+        render.add_rect_filled(
+            vector2(pos.x - spread, pos.y - spread),
+            vector2(pos.x + size.x + spread, pos.y + size.y + spread),
+            color(0, 0, 0, alpha), 8
+        )
+    end
+    
+    -- Background
+    render.add_rect_filled(pos, vector2(pos.x + size.x, pos.y + size.y), color(0.08, 0.08, 0.12, 0.95), 8)
+    render.add_rect(pos, vector2(pos.x + size.x, pos.y + size.y), color(0.2, 0.2, 0.3, 1), 8, 1)
+    
+    -- Album art
+    local art_pos = vector2(pos.x + pad, pos.y + pad)
+    if self.AlbumTexture then
+        render.add_texture(self.AlbumTexture, 
+            art_pos, 
+            vector2(art_pos.x + art_size, art_pos.y + art_size), 
+            1.0)
+    else
+        -- Placeholder
+        render.add_rect_filled(art_pos, vector2(art_pos.x + art_size, art_pos.y + art_size), 
+            color(0.12, 0.12, 0.16, 1), 4)
+        render.add_text(vector2(art_pos.x + 20, art_pos.y + 20), "♪", color(0.3, 0.3, 0.5, 1))
+    end
+    
+    local text_x = pos.x + art_size + pad * 2
+    local text_w = size.x - art_size - pad * 3
+    
+    if t.idle then
+        render.add_text(vector2(text_x, pos.y + 28), "🎧 Nothing Playing", color(0.6, 0.6, 0.7, 1))
+        render.add_text(vector2(text_x, pos.y + 44), "Connect in browser", color(0.4, 0.4, 0.5, 1))
+    else
+        -- Song name
+        local song = t.name
+        if #song > 30 then song = string.sub(song, 1, 27) .. "..." end
+        render.add_text(vector2(text_x, pos.y + 8), song, color(0.95, 0.95, 1, 1))
+        
+        -- Artist
+        local artist = t.artist
+        if #artist > 30 then artist = string.sub(artist, 1, 27) .. "..." end
+        render.add_text(vector2(text_x, pos.y + 24), artist, color(0.55, 0.55, 0.7, 1))
+        
+        -- Progress bar
+        local bar_y = pos.y + 42
+        local bar_w = text_w
+        local prog_w = bar_w * (self._rendered_progress or 0)
+        
+        render.add_rect_filled(vector2(text_x, bar_y), vector2(text_x + bar_w, bar_y + 3), color(0.15, 0.15, 0.2, 1), 2)
+        if prog_w > 0 then
+            render.add_rect_filled(vector2(text_x, bar_y), vector2(text_x + prog_w, bar_y + 3), color(0.2, 0.8, 0.4, 1), 2)
+        end
+        
+        -- Time stamps
+        local current = format_time((self._rendered_progress or 0) * t.duration)
+        local total = format_time(t.duration)
+        
+        render.add_text(vector2(text_x, bar_y + 6), current, color(0.45, 0.45, 0.55, 1))
+        render.add_text(vector2(text_x + bar_w - render.get_text_size(total).x, bar_y + 6), total, color(0.45, 0.45, 0.55, 1))
+        
+        -- Playing indicator
+        local dot_color = t.is_playing and color(0.2, 0.8, 0.4, 1) or color(0.5, 0.5, 0.6, 1)
+        render.add_circle_filled(vector2(pos.x + size.x - 12, pos.y + 12), 3, dot_color, 8)
+    end
+end
+
+-- Drag handling (call this in render hook before Draw)
+function Spotify:HandleDrag()
+    if not self.Enabled then return end
+    
+    local mp = input.get_mouse_position()
+    local pos = vector2(self._position_x, self._position_y)
+    local size = vector2(260, 70)
+    
+    -- Start drag
+    if input.is_key_pressed(0x01) then  -- Left mouse button
+        if mp.x >= pos.x and mp.x <= pos.x + size.x and
+           mp.y >= pos.y and mp.y <= pos.y + size.y then
+            self._drag.active = true
+            self._drag.offset_x = mp.x - pos.x
+            self._drag.offset_y = mp.y - pos.y
+        end
+    end
+    
+    -- Update drag
+    if self._drag.active and input.key_down(0x01) then
+        self._position_x = mp.x - self._drag.offset_x
+        self._position_y = mp.y - self._drag.offset_y
+    else
+        self._drag.active = false
+    end
+end
+
+-- Simple menu to control Spotify
+local menu = {
+    visible = true,
+    x = 300,
+    y = 200,
+    drag = { active = false, off_x = 0, off_y = 0 },
+}
+
+function menu:Draw()
+    if not self.visible then return end
+    
+    local pos = vector2(self.x, self.y)
+    local size = vector2(200, 150)
+    
+    -- Shadow
+    for i = 1, 4 do
+        local spread = i * 2
+        render.add_rect_filled(
+            vector2(pos.x - spread, pos.y - spread),
+            vector2(pos.x + size.x + spread, pos.y + size.y + spread),
+            color(0, 0, 0, 0.08), 8
+        )
+    end
+    
+    -- Background
+    render.add_rect_filled(pos, vector2(pos.x + size.x, pos.y + size.y), color(0.08, 0.08, 0.12, 0.95), 8)
+    render.add_rect(pos, vector2(pos.x + size.x, pos.y + size.y), color(0.2, 0.2, 0.3, 1), 8, 1)
+    
+    -- Title (draggable area)
+    render.add_rect_filled(pos, vector2(pos.x + size.x, pos.y + 28), color(0.12, 0.12, 0.18, 1), 8)
+    render.add_text(vector2(pos.x + 10, pos.y + 7), "Spotify Player", color(0.9, 0.9, 1, 1))
+    
+    -- Drag handler for menu
+    if input.is_key_pressed(0x01) then
+        local mp = input.get_mouse_position()
+        if mp.x >= pos.x and mp.x <= pos.x + size.x and mp.y >= pos.y and mp.y <= pos.y + 28 then
+            self.drag.active = true
+            self.drag.off_x = mp.x - self.x
+            self.drag.off_y = mp.y - self.y
+        end
+    end
+    
+    if self.drag.active and input.key_down(0x01) then
+        local mp = input.get_mouse_position()
+        self.x = mp.x - self.drag.off_x
+        self.y = mp.y - self.drag.off_y
+    else
+        self.drag.active = false
+    end
+    
+    -- Status text
+    local status = Spotify.Enabled and "✅ ENABLED" or "❌ DISABLED"
+    local status_color = Spotify.Enabled and color(0.2, 0.8, 0.4, 1) or color(0.8, 0.2, 0.2, 1)
+    render.add_text(vector2(pos.x + 15, pos.y + 42), status, status_color)
+    
+    -- Current track info
+    if Spotify.Enabled and not Spotify.Track.idle then
+        local song = Spotify.Track.name
+        if #song > 22 then song = string.sub(song, 1, 19) .. "..." end
+        render.add_text(vector2(pos.x + 15, pos.y + 62), song, color(0.85, 0.85, 0.95, 1))
+    end
+    
+    -- Toggle button
+    local btn_pos = vector2(pos.x + 15, pos.y + 95)
+    local btn_size = vector2(size.x - 30, 35)
+    local btn_hover = false
+    
+    local mp = input.get_mouse_position()
+    if mp.x >= btn_pos.x and mp.x <= btn_pos.x + btn_size.x and
+       mp.y >= btn_pos.y and mp.y <= btn_pos.y + btn_size.y then
+        btn_hover = true
+    end
+    
+    local btn_color = Spotify.Enabled and color(0.2, 0.6, 0.3, 1) or color(0.3, 0.3, 0.4, 1)
+    if btn_hover then
+        btn_color = color(btn_color.r * 1.2, btn_color.g * 1.2, btn_color.b * 1.2, 1)
+    end
+    
+    render.add_rect_filled(btn_pos, vector2(btn_pos.x + btn_size.x, btn_pos.y + btn_size.y), btn_color, 6)
+    render.add_rect(btn_pos, vector2(btn_pos.x + btn_size.x, btn_pos.y + btn_size.y), color(0.5, 0.5, 0.6, 1), 6, 1)
+    
+    local btn_text = Spotify.Enabled and "Disconnect" or "Connect"
+    local text_w = render.get_text_size(btn_text).x
+    render.add_text(vector2(btn_pos.x + btn_size.x/2 - text_w/2, btn_pos.y + 10), btn_text, color(1, 1, 1, 1))
+    
+    if btn_hover and input.is_key_pressed(0x01) then
+        Spotify:Toggle()
+    end
+end
+
+-- Main render hook
+hook.add("render", "spotify_player", function()
+    Spotify:HandleDrag()
+    Spotify:Draw()
+    menu:Draw()
+end)
+
+-- Print instructions
+print("")
+print("========================================")
+print("🎵 Spotify Player Loaded for Photon!")
+print("========================================")
+print("📋 Instructions:")
+print("   1. Click 'Connect' in the menu")
+print("   2. Auth URL will be copied to clipboard")
+print("   3. Open URL in browser and authorize")
+print("   4. Play music on Spotify")
+print("💡 Drag the player or menu to move them")
+print("========================================")
+print("")
+
+return { Spotify = Spotify, Menu = menu }
