@@ -256,11 +256,14 @@ end
 
 function Spotify:TickProgress()
     if not self.Track.is_playing or self.Track.idle then return end
-    local elapsed = get_tickcount() - (self._last_poll_ms or 0)
     
-    -- Convert to numbers safely
+    -- Ensure we have numbers, not strings
     local progress = tonumber(self.Track.progress) or 0
     local duration = tonumber(self.Track.duration) or 1
+    local last_poll = tonumber(self._last_poll_ms) or 0
+    local elapsed = get_tickcount() - last_poll
+    
+    if duration <= 0 then duration = 1 end
     
     self._rendered_progress = math.min(
         (progress + elapsed) / duration, 1)
@@ -317,34 +320,44 @@ hook.add("render", "spotify_miniplayer", function()
     else
         -- track name
         render.add_text(vector2(tx, pos.y + 7),
-            get_clipped_text(t.name, text_w), color(0.95, 0.95, 1, 1))
+            get_clipped_text(tostring(t.name) or "", text_w), color(0.95, 0.95, 1, 1))
         -- artist
         render.add_text(vector2(tx, pos.y + 20),
-            get_clipped_text(t.artist, text_w), color(0.5, 0.5, 0.62, 1))
+            get_clipped_text(tostring(t.artist) or "", text_w), color(0.5, 0.5, 0.62, 1))
 
-        -- progress bar
+        -- progress bar - FIX: ensure numbers
         local bar_pos  = vector2(tx, pos.y + 36)
-        local bar_w    = text_w
+        local bar_w    = tonumber(text_w) or 224  -- Convert to number
+        local progress = tonumber(Spotify._rendered_progress) or 0  -- Convert to number
+        
+        -- Safely calculate progress width
+        local progress_width = 0
+        if bar_w and progress then
+            progress_width = math.max(0, bar_w * progress)
+        end
+        
         render.add_rect_filled(bar_pos, bar_pos:add(vector2(bar_w, 4)),
             color(0.15, 0.15, 0.2, 1), 2)
         render.add_rect_filled(bar_pos,
-            bar_pos:add(vector2(math.max(0, bar_w * Spotify._rendered_progress), 4)),
+            bar_pos:add(vector2(progress_width, 4)),
             color(0.11, 0.73, 0.33, 1), 2)
 
-        -- timestamps
-        local elapsed_ms = math.floor(Spotify._rendered_progress * t.duration)
+        -- timestamps - FIX: ensure numbers
+        local duration = tonumber(t.duration) or 1
+        local elapsed_ms = math.floor((progress or 0) * duration)
         render.add_text(vector2(tx, pos.y + 44),
             spotify_format_ms(elapsed_ms), color(0.4, 0.4, 0.5, 1))
-        local dur_str = spotify_format_ms(t.duration)
+        local dur_str = spotify_format_ms(duration)
         render.add_text(
             vector2(pos.x + sz.x - render.get_text_size(dur_str).x - pad, pos.y + 44),
             dur_str, color(0.4, 0.4, 0.5, 1))
 
         -- playing/paused dot
+        local is_playing = t.is_playing == true
         render.add_circle_filled(
             vector2(pos.x + sz.x - 8, pos.y + 8),
             3,
-            t.is_playing and color(0.11, 0.73, 0.33, 1) or color(0.35, 0.35, 0.42, 1),
+            is_playing and color(0.11, 0.73, 0.33, 1) or color(0.35, 0.35, 0.42, 1),
             8)
     end
 end)
