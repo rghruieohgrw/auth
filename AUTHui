@@ -218,14 +218,22 @@ function Spotify:Connect()
                         self.Track.is_playing = false
 
                     elseif data.type == "track" then
-                        self.Track.name       = data.name or ""
-                        self.Track.artist     = data.artist or ""
-                        self.Track.progress   = data.progress or 0
-                        self.Track.duration   = data.duration or 1
-                        self.Track.is_playing = data.is_playing or false
-                        self.Track.idle       = false
-                        self._rendered_progress = self.Track.progress / self.Track.duration
-                        self._last_poll_ms    = get_tickcount()
+    self.Track.name       = tostring(data.name or "")
+    self.Track.artist     = tostring(data.artist or "")
+    self.Track.progress   = tonumber(data.progress) or 0  -- Convert to number
+    self.Track.duration   = tonumber(data.duration) or 1  -- Convert to number
+    self.Track.is_playing = data.is_playing == true
+    self.Track.idle       = false
+    
+    -- SAFE division
+    local duration = tonumber(self.Track.duration) or 1
+    if duration > 0 then
+        self._rendered_progress = (tonumber(self.Track.progress) or 0) / duration
+    else
+        self._rendered_progress = 0
+    end
+    self._last_poll_ms    = get_tickcount()
+
                         if data.changed then
                             self.AlbumTexture = nil
                             self:FetchArt(data.art_url or "")
@@ -257,7 +265,7 @@ end
 function Spotify:TickProgress()
     if not self.Track.is_playing or self.Track.idle then return end
     
-    -- Ensure we have numbers, not strings
+    -- SAFE: Convert all values to numbers
     local progress = tonumber(self.Track.progress) or 0
     local duration = tonumber(self.Track.duration) or 1
     local last_poll = tonumber(self._last_poll_ms) or 0
@@ -265,13 +273,7 @@ function Spotify:TickProgress()
     
     if duration <= 0 then duration = 1 end
     
-    self._rendered_progress = math.min(
-        (progress + elapsed) / duration, 1)
-end
-
-local function spotify_format_ms(ms)
-    local s = math.floor(ms / 1000)
-    return string.format("%d:%02d", math.floor(s / 60), s % 60)
+    self._rendered_progress = math.min((progress + elapsed) / duration, 1)
 end
 
 -- Spotify mini-player render (sits just below watermark)
@@ -325,29 +327,48 @@ hook.add("render", "spotify_miniplayer", function()
         render.add_text(vector2(tx, pos.y + 20),
             get_clipped_text(tostring(t.artist) or "", text_w), color(0.5, 0.5, 0.62, 1))
 
-        -- progress bar - FIX: ensure numbers
-        local bar_pos  = vector2(tx, pos.y + 36)
-        local bar_w    = tonumber(text_w) or 224  -- Convert to number
-        local progress = tonumber(Spotify._rendered_progress) or 0  -- Convert to number
-        
-        -- Safely calculate progress width
-        local progress_width = 0
-        if bar_w and progress then
-            progress_width = math.max(0, bar_w * progress)
-        end
-        
-        render.add_rect_filled(bar_pos, bar_pos:add(vector2(bar_w, 4)),
-            color(0.15, 0.15, 0.2, 1), 2)
-        render.add_rect_filled(bar_pos,
-            bar_pos:add(vector2(progress_width, 4)),
-            color(0.11, 0.73, 0.33, 1), 2)
+-- Add this debug code BEFORE the progress bar section
+if type(text_w) ~= "number" then
+    print("ERROR: text_w is", type(text_w), text_w)
+    text_w = 224  -- force to number
+end
+if type(Spotify._rendered_progress) ~= "number" then
+    print("ERROR: progress is", type(Spotify._rendered_progress), Spotify._rendered_progress)
+    Spotify._rendered_progress = 0  -- force to number
+end
 
-        -- timestamps - FIX: ensure numbers
-        local duration = tonumber(t.duration) or 1
-        local elapsed_ms = math.floor((progress or 0) * duration)
-        render.add_text(vector2(tx, pos.y + 44),
-            spotify_format_ms(elapsed_ms), color(0.4, 0.4, 0.5, 1))
-        local dur_str = spotify_format_ms(duration)
+-- progress bar
+local bar_pos = vector2(tx, pos.y + 36)
+local bar_w = tonumber(text_w) or 224
+local progress = tonumber(Spotify._rendered_progress) or 0
+
+-- This is line 1570 - make sure both are numbers
+local progress_width = math.max(0, bar_w * progress)  -- THIS LINE
+
+-- progress bar - FIXED: convert to numbers
+local bar_pos  = vector2(tx, pos.y + 36)
+local bar_w    = tonumber(text_w) or 224
+local progress = tonumber(Spotify._rendered_progress) or 0
+
+-- Calculate progress width safely
+local progress_width = 0
+if bar_w and progress then
+    progress_width = math.max(0, bar_w * progress)
+end
+
+render.add_rect_filled(bar_pos, bar_pos:add(vector2(bar_w, 4)),
+    color(0.15, 0.15, 0.2, 1), 2)
+render.add_rect_filled(bar_pos,
+    bar_pos:add(vector2(progress_width, 4)),
+    color(0.11, 0.73, 0.33, 1), 2)
+
+        -- timestamps - FIXED: convert to numbers
+local duration_num = tonumber(t.duration) or 1
+local progress_num = tonumber(Spotify._rendered_progress) or 0
+local elapsed_ms = math.floor(progress_num * duration_num)
+render.add_text(vector2(tx, pos.y + 44),
+    spotify_format_ms(elapsed_ms), color(0.4, 0.4, 0.5, 1))
+local dur_str = spotify_format_ms(duration_num)
         render.add_text(
             vector2(pos.x + sz.x - render.get_text_size(dur_str).x - pad, pos.y + 44),
             dur_str, color(0.4, 0.4, 0.5, 1))
