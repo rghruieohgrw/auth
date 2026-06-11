@@ -1,7 +1,8 @@
 -- Complete Working Photon UI Library
 -- Fixed: Config saving/loading with dropdown, Menu shows when Photon menu is closed
 -- Fixed: Keybinds, proper rendering, full functionality
--- Added: Drag-to-scroll scrollbars for Groupboxes, Dropdowns, and Tab containers
+-- Added: Drag-to-scroll scrollbars + mouse wheel scrolling
+-- Added: Screen-bound shadows/popups/windows, liquid glass panels with theme settings
 
 -- Resolve local player username at load time
 local _players = game:get_service("Players")
@@ -61,6 +62,31 @@ local Library = {
     -- Active scrollbar drag (only one at a time)
     -- { id = string, track_y = number, track_h = number, content_h = number, visible_h = number }
     ActiveScrollbar = nil,
+
+    ScrollHoverZones = {},
+    ScrollWheelSpeed = 30,
+    ScreenPadding = 8,
+
+    -- Liquid glass theme (simulated blur — Photon has no native backdrop blur)
+    Glass = {
+        Enabled      = true,
+        Transparency = 0.68,
+        Blur         = 5,
+        Tint         = color(0.10, 0.10, 0.14, 1),
+        Highlight    = color(1, 1, 1, 0.10),
+        Border       = color(1, 1, 1, 0.14),
+        Shine        = color(1, 1, 1, 0.06),
+    },
+
+    SetGlass = function(self, opts)
+        if not opts then return self end
+        for k, v in pairs(opts) do
+            if self.Glass[k] ~= nil or k == "Enabled" or k == "Transparency" or k == "Blur" then
+                self.Glass[k] = v
+            end
+        end
+        return self
+    end,
 
     -- ========== CONFIG SYSTEM ==========
     ConfigFolder = "photon_configs/",
@@ -133,6 +159,13 @@ local Library = {
             config.windows[i] = { pos = { x = win.Pos.x, y = win.Pos.y } }
         end
         config.watermark = { x = self.Watermark.Pos.x, y = self.Watermark.Pos.y }
+        local g = self.Glass
+        config.glass = {
+            enabled = g.Enabled, transparency = g.Transparency, blur = g.Blur,
+            tint = { r = g.Tint.r, g = g.Tint.g, b = g.Tint.b, a = g.Tint.a },
+            highlight = { r = g.Highlight.r, g = g.Highlight.g, b = g.Highlight.b, a = g.Highlight.a },
+            border = { r = g.Border.r, g = g.Border.g, b = g.Border.b, a = g.Border.a },
+        }
         file.write(self.ConfigFolder .. name .. ".json", self:TableToJSON(config))
         self:UpdateManifest(name)
         self.CurrentConfig = name
@@ -168,11 +201,31 @@ local Library = {
         end
         for i, win_data in ipairs(config.windows or {}) do
             if self.Windows[i] then
-                self.Windows[i].Pos = vector2(win_data.pos.x, win_data.pos.y)
+                self.Windows[i].Pos = clamp_position(
+                    vector2(win_data.pos.x, win_data.pos.y), self.Windows[i].Size)
             end
         end
         if config.watermark then
-            self.Watermark.Pos = vector2(config.watermark.x, config.watermark.y)
+            self.Watermark.Pos = clamp_position(
+                vector2(config.watermark.x, config.watermark.y), vector2(220, 24))
+        end
+        if config.glass then
+            local gd = config.glass
+            self.Glass.Enabled = gd.enabled ~= false
+            if gd.transparency then self.Glass.Transparency = gd.transparency end
+            if gd.blur then self.Glass.Blur = gd.blur end
+            if gd.tint then
+                local t = gd.tint
+                self.Glass.Tint = color(t.r, t.g, t.b, t.a or 1)
+            end
+            if gd.highlight then
+                local h = gd.highlight
+                self.Glass.Highlight = color(h.r, h.g, h.b, h.a or 1)
+            end
+            if gd.border then
+                local b = gd.border
+                self.Glass.Border = color(b.r, b.g, b.b, b.a or 1)
+            end
         end
         self.ConfigLoaded = true
         self.CurrentConfig = name
@@ -521,30 +574,156 @@ local function draw_checkerboard(pos, size, sq)
     end
 end
 
-local function draw_shadow(pos, size, radius, alpha_mult)
-    local layers = 8
-    for i = 1, layers do
-        local spread = i * 3
-        local a = (1 - i / layers) * 0.18 * (alpha_mult or 1)
-        local sp = pos:add(vector2(-spread, -spread + spread * 0.5))
-        local ss = size:add(vector2(spread * 2, spread * 2))
-        render.add_rect_filled(sp, sp:add(ss), color(0, 0, 0, a), radius + i)
+local SB_WIDTH       = 5
+local SB_MIN_THUMB   = 16
+local SB_PAD         = 3
+local WHEEL_UP       = 0x100
+local WHEEL_DOWN     = 0x101
+
+local SCREEN = vector2(1920, 1080)
+
+local function refresh_screen()
+    SCREEN = get_screen_size()
+end
+
+local function clamp_position(pos, size, pad)
+    pad = pad or Library.ScreenPadding
+    local x = math.clamp(pos.x, pad, math.max(pad, SCREEN.x - size.x - pad))
+    local y = math.clamp(pos.y, pad, math.max(pad, SCREEN.y - size.y - pad))
+    return vector2(x, y)
+end
+
+local function fit_popup_position(anchor_pos, anchor_size, popup_size, gap)
+    gap = gap or 2
+    local pad = Library.ScreenPadding
+    local below = anchor_pos:add(vector2(0, anchor_size.y + gap))
+    local above = vector2(anchor_pos.x, anchor_pos.y - popup_size.y - gap)
+    local pos = below
+    if below.y + popup_size.y > SCREEN.y - pad then
+        if above.y >= pad then pos = above
+        else pos = clamp_position(below, popup_size, pad) end
+    end
+    pos = vector2(
+        math.clamp(pos.x, pad, math.max(pad, SCREEN.x - popup_size.x - pad)),
+        math.clamp(pos.y, pad, math.max(pad, SCREEN.y - popup_size.y - pad)))
+    return pos
+end
+
+local function get_wheel_delta()
+    if type(input.get_mouse_wheel) == "function" then
+        return input.get_mouse_wheel()
+    end
+    if type(input.get_mouse_wheel_delta) == "function" then
+        return input.get_mouse_wheel_delta()
+    end
+    if type(input.mouse_wheel) == "function" then
+        return input.mouse_wheel()
+    end
+    local d = 0
+    if input.is_key_pressed(WHEEL_UP) then d = d + 1 end
+    if input.is_key_pressed(WHEEL_DOWN) then d = d - 1 end
+    if input.is_key_pressed(0x21) then d = d + 1 end
+    if input.is_key_pressed(0x22) then d = d - 1 end
+    return d
+end
+
+local function register_scroll_zone(zone_pos, zone_size, state, content_h, visible_h)
+    if content_h <= visible_h then return end
+    table.insert(Library.ScrollHoverZones, {
+        pos = zone_pos, size = zone_size,
+        state = state, content_h = content_h, visible_h = visible_h,
+    })
+end
+
+local function apply_wheel_scroll(delta)
+    if delta == 0 or #Library.ScrollHoverZones == 0 then return end
+    local best, best_area = nil, math.huge
+    for _, zone in ipairs(Library.ScrollHoverZones) do
+        if is_mouse_in_rect(zone.pos, zone.size) then
+            local area = zone.size.x * zone.size.y
+            if area < best_area then best_area = area; best = zone end
+        end
+    end
+    if best then
+        best.state.offset = best.state.offset - delta * Library.ScrollWheelSpeed
+        clamp_scroll(best.state, best.content_h, best.visible_h)
     end
 end
 
--- ─────────────────────────────────────────────
---  Scrollbar helpers
---
---  Photon has no scissor/clip API, so we simulate clipping by drawing filled
---  rectangles over the overflow areas (overdraw masking).  The content is
---  drawn at a negative Y offset equal to scroll_offset, then two opaque
---  mask rects cover anything above or below the visible window.
---
---  Scrollbar constants
--- ─────────────────────────────────────────────
-local SB_WIDTH       = 5   -- px wide track
-local SB_MIN_THUMB   = 16  -- minimum thumb height in px
-local SB_PAD         = 3   -- gap between content and track
+local function draw_shadow(pos, size, radius, alpha_mult)
+    local pad = Library.ScreenPadding
+    local max_spread = math.huge
+    max_spread = math.min(max_spread, pos.x - pad)
+    max_spread = math.min(max_spread, pos.y - pad)
+    max_spread = math.min(max_spread, (SCREEN.x - pad) - (pos.x + size.x))
+    max_spread = math.min(max_spread, (SCREEN.y - pad) - (pos.y + size.y))
+    max_spread = math.max(0, max_spread)
+
+    local layers = 8
+    for i = 1, layers do
+        local ideal = i * 3
+        local spread = math.min(ideal, max_spread + 1)
+        if spread <= 0 then break end
+        local fade = spread / ideal
+        local a = (1 - i / layers) * 0.18 * (alpha_mult or 1) * fade
+        local sp = pos:add(vector2(-spread, -spread + spread * 0.5))
+        local maxp = sp:add(size:add(vector2(spread * 2, spread * 2)))
+        if maxp.x > 0 and maxp.y > 0 and sp.x < SCREEN.x and sp.y < SCREEN.y then
+            render.add_rect_filled(sp, maxp, color(0, 0, 0, a), radius + i)
+        end
+    end
+end
+
+local function draw_liquid_glass(pos, size, rounding, alpha_mult, tint_override)
+    local g = Library.Glass
+    local tint = tint_override or g.Tint
+    local alpha = alpha_mult or 1
+
+    if not g.Enabled then
+        render.add_rect_filled(pos, pos:add(size), apply_alpha(tint, alpha), rounding)
+        render.add_rect(pos, pos:add(size), apply_alpha(Library.OutlineColor, alpha), rounding, 1)
+        return
+    end
+
+    local blur_layers = math.floor(math.clamp(g.Blur, 0, 8))
+    local base_a = (1 - g.Transparency) * alpha
+
+    if blur_layers > 0 then
+        for i = blur_layers, 1, -1 do
+            local off = i * 0.75
+            local ba = base_a * 0.035 * (i / blur_layers)
+            render.add_rect_filled(
+                pos:add(vector2(-off, -off)),
+                pos:add(size):add(vector2(off, off)),
+                color(tint.r, tint.g, tint.b, ba),
+                rounding + i)
+        end
+    end
+
+    render.add_rect_filled(pos, pos:add(size),
+        color(tint.r, tint.g, tint.b, base_a * 0.82), rounding)
+
+    local shine_h = math.min(size.y * 0.42, 36)
+    for i = 0, shine_h - 1 do
+        local t = i / math.max(1, shine_h)
+        local ha = g.Highlight.a * (1 - t) * alpha * 0.55
+        render.add_line(
+            pos:add(vector2(rounding, i + 1)),
+            vector2(pos.x + size.x - rounding, pos.y + i + 1),
+            color(g.Highlight.r, g.Highlight.g, g.Highlight.b, ha), 1)
+    end
+
+    local streak_a = g.Shine.a * alpha
+    render.add_line(
+        pos:add(vector2(size.x * 0.08, 2)),
+        pos:add(vector2(size.x * 0.52, shine_h)),
+        color(g.Shine.r, g.Shine.g, g.Shine.b, streak_a), 1)
+
+    render.add_rect(pos, pos:add(size), apply_alpha(g.Border, alpha), rounding, 1)
+    render.add_rect(
+        pos:add(vector2(1, 1)), pos:add(size):subtract(vector2(1, 1)),
+        color(1, 1, 1, 0.04 * alpha), math.max(0, rounding - 1), 1)
+end
 
 -- Returns or creates persistent scroll state for the given ID.
 local function get_scroll_state(id)
@@ -621,18 +800,25 @@ end
 -- content that was rendered outside the clip region.
 -- This is called AFTER the scrollable content is drawn.
 local function apply_clip_mask(clip_pos, clip_size, bg_color, alpha)
-    -- Area above the clipping window
-    local above_h = 60  -- generous overdraw coverage
+    local fill = apply_alpha(bg_color, alpha)
+    if Library.Glass.Enabled then
+        local g = Library.Glass
+        fill = color(
+            lerp(g.Tint.r, bg_color.r, 0.35),
+            lerp(g.Tint.g, bg_color.g, 0.35),
+            lerp(g.Tint.b, bg_color.b, 0.35),
+            (1 - g.Transparency) * (alpha or 1))
+    end
+    local above_h = 60
     render.add_rect_filled(
         clip_pos:subtract(vector2(0, above_h)),
         vector2(clip_pos.x + clip_size.x, clip_pos.y),
-        apply_alpha(bg_color, alpha), 0)
-    -- Area below the clipping window
+        fill, 0)
     local below_h = 60
     render.add_rect_filled(
         vector2(clip_pos.x, clip_pos.y + clip_size.y),
         clip_pos:add(vector2(clip_size.x, clip_size.y + below_h)),
-        apply_alpha(bg_color, alpha), 0)
+        fill, 0)
 end
 
 -- ─────────────────────────────────────────────
@@ -717,7 +903,9 @@ function Library:CreateWindow(config)
     local window = {
         Title     = config.Title or "Window",
         Pos       = config.Center
-            and vector2(get_screen_size().x/2-(config.Size.x/2), get_screen_size().y/2-(config.Size.y/2))
+            and clamp_position(
+                vector2(get_screen_size().x/2-(config.Size.x/2), get_screen_size().y/2-(config.Size.y/2)),
+                config.Size or vector2(580, 620))
             or  vector2(175, 50),
         Size      = config.Size or vector2(580, 620),
         Visible   = config.AutoShow or false,
@@ -834,9 +1022,15 @@ local function render_tooltip(alpha)
         local ts = render.get_text_size(Library.Tooltip.Text)
         local tsz = vector2(ts.x+14, ts.y+10)
         local tp = mp:add(vector2(14,14))
+        if tp.x + tsz.x > SCREEN.x - Library.ScreenPadding then
+            tp = vector2(mp.x - tsz.x - 14, tp.y)
+        end
+        if tp.y + tsz.y > SCREEN.y - Library.ScreenPadding then
+            tp = vector2(tp.x, mp.y - tsz.y - 14)
+        end
+        tp = clamp_position(tp, tsz)
         draw_shadow(tp, tsz, 6, alpha)
-        render.add_rect_filled(tp, tp:add(tsz), apply_alpha(Library.MainColor, alpha), 6)
-        render.add_rect(tp, tp:add(tsz), apply_alpha(Library.OutlineColor, alpha), 6, 1)
+        draw_liquid_glass(tp, tsz, 6, alpha, Library.MainColor)
         render.add_text(tp:add(vector2(7,5)), Library.Tooltip.Text, apply_alpha(Library.FontColor, alpha))
     end
 end
@@ -848,10 +1042,10 @@ local function draw_watermark()
     if not Library.Watermark.Visible then return end
     local ts = render.get_text_size(Library.Watermark.Text)
     local wsz = vector2(ts.x+16, 24)
+    Library.Watermark.Pos = clamp_position(Library.Watermark.Pos, wsz)
     local pos = Library.Watermark.Pos
     draw_shadow(pos, wsz, 6, 1)
-    render.add_rect_filled(pos, pos:add(wsz), Library.MainColor, 6)
-    render.add_rect(pos, pos:add(wsz), Library.OutlineColor, 6, 1)
+    draw_liquid_glass(pos, wsz, 6, 1, Library.MainColor)
     render.add_text(pos:add(vector2(8,4)), Library.Watermark.Text, Library.FontColor)
 end
 
@@ -859,6 +1053,9 @@ end
 --  Main render hook
 -- ─────────────────────────────────────────────
 hook.add("render", "auth_photon_render", function()
+    refresh_screen()
+    Library.ScrollHoverZones = {}
+
     local anim = Library.Animation
     if anim.State == "FadingOut" then
         anim.CurrentAlpha = anim.CurrentAlpha - anim.Speed
@@ -947,7 +1144,9 @@ hook.add("render", "auth_photon_render", function()
 
     -- ── window drag ──
     if Library.DraggingWindow then
-        if mdown then Library.DraggingWindow.Pos = mp:subtract(Library.DragOffset)
+        if mdown then
+            Library.DraggingWindow.Pos = clamp_position(
+                mp:subtract(Library.DragOffset), Library.DraggingWindow.Size)
         else Library.DraggingWindow=nil end
     end
 
@@ -985,7 +1184,9 @@ hook.add("render", "auth_photon_render", function()
         Library.DraggingWatermark=true; Library.DragOffset=mp:subtract(Library.Watermark.Pos)
     end
     if Library.DraggingWatermark then
-        if mdown then Library.Watermark.Pos=mp:subtract(Library.DragOffset)
+        if mdown then
+            local wsz = vector2(render.get_text_size(Library.Watermark.Text).x+16, 24)
+            Library.Watermark.Pos = clamp_position(mp:subtract(Library.DragOffset), wsz)
         else Library.DraggingWatermark=false end
     end
 
@@ -997,6 +1198,7 @@ hook.add("render", "auth_photon_render", function()
     -- ─────────────────────────────────────────
     for win_idx, window in ipairs(Library.Windows) do
         if window.Visible then
+            window.Pos = clamp_position(window.Pos, window.Size)
             window.Alpha = window.Alpha + (window.TargetAlpha - window.Alpha) * 0.07
             local wa = window.Alpha
             if wa < 0.01 then goto continue_window end
@@ -1013,15 +1215,13 @@ hook.add("render", "auth_photon_render", function()
             end
 
             draw_shadow(window.Pos, window.Size, 12, wa)
-            render.add_rect_filled(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.BackgroundColor, wa), 10)
-            render.add_rect(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.OutlineColor, wa), 10, 1)
-            render.add_text(window.Pos:add(vector2(14,10)), window.Title, apply_alpha(Library.FontColor, wa))
+            draw_liquid_glass(window.Pos, window.Size, 10, wa, Library.Glass.Tint)
 
             local msp = window.Pos:add(vector2(12,36))
             local mss = vector2(window.Size.x-24, window.Size.y-48)
-            render.add_rect_filled(msp, msp:add(mss), apply_alpha(Library.BackgroundColor, wa), 8)
+            draw_liquid_glass(msp, mss, 8, wa, Library.BackgroundColor)
+            render.add_text(window.Pos:add(vector2(14,10)), window.Title, apply_alpha(Library.FontColor, wa))
 
-            -- ── tab bar ──
             local tab_area_pos = msp:add(vector2(4,4))
             local tab_x = 0
             for _, tab in ipairs(window.Tabs) do
@@ -1077,7 +1277,6 @@ hook.add("render", "auth_photon_render", function()
                     local sb_track_pos = tab_container_pos:add(vector2(tab_container_size.x - SB_WIDTH, 4))
                     local sb_track_h   = tab_container_size.y - 8
 
-                    -- Store layout on state so the drag handler above can use it
                     tab_scroll_state._track_h   = sb_track_h
                     tab_scroll_state._content_h = tab_content_h
                     tab_scroll_state._visible_h = tab_container_size.y
@@ -1085,6 +1284,11 @@ hook.add("render", "auth_photon_render", function()
                     draw_scrollbar(sb_track_pos, sb_track_h,
                         tab_content_h, tab_container_size.y,
                         tab_scroll_state, op, mpressed, mdown, mp)
+
+                    register_scroll_zone(
+                        tab_container_pos:add(vector2(0, 4)),
+                        vector2(tab_container_size.x, tab_container_size.y - 4),
+                        tab_scroll_state, tab_content_h, tab_container_size.y)
                 end
 
                 local scroll_off    = tab_scroll_state.offset
@@ -1124,8 +1328,7 @@ hook.add("render", "auth_photon_render", function()
                         end
 
                         draw_shadow(group_pos, group_size, 8, op * 0.5)
-                        render.add_rect_filled(group_pos, group_pos:add(group_size), apply_alpha(Library.MainColor, op), 8)
-                        render.add_rect(group_pos, group_pos:add(group_size), apply_alpha(Library.OutlineColor, op), 8, 1)
+                        draw_liquid_glass(group_pos, group_size, 8, op, Library.MainColor)
                         render.add_text(group_pos:add(vector2(10,8)), groupbox.Name, apply_alpha(Library.FontColor, op))
 
                         -- Groupbox scrollbar
@@ -1134,6 +1337,10 @@ hook.add("render", "auth_photon_render", function()
                             local sb_h   = group_visible_h - 34
                             draw_scrollbar(sb_pos, sb_h, raw_content_h, group_visible_h,
                                 gb_scroll_state, op, mpressed, mdown, mp)
+                            register_scroll_zone(
+                                group_pos:add(vector2(0, 28)),
+                                vector2(group_size.x, group_visible_h - 28),
+                                gb_scroll_state, raw_content_h, group_visible_h)
                         end
 
                         local gb_scroll_off = gb_scroll_state.offset
@@ -1393,9 +1600,9 @@ hook.add("render", "auth_photon_render", function()
         local item_h = 22
         local needs_list_scroll = total_items > max_visible
 
-        local list_pos  = e.Layout.pos:add(vector2(0, e.Layout.size.y+2))
         local list_h    = visible_items * item_h + 4
         local list_size = vector2(e.Layout.size.x, list_h)
+        local list_pos  = fit_popup_position(e.Layout.pos, e.Layout.size, list_size)
         e.Layout.list_pos  = list_pos
         e.Layout.list_size = list_size
 
@@ -1410,14 +1617,17 @@ hook.add("render", "auth_photon_render", function()
         end
 
         draw_shadow(list_pos, list_size, 6, 1)
-        render.add_rect_filled(list_pos, list_pos:add(list_size), Library.MainColor, 6)
-        render.add_rect(list_pos, list_pos:add(list_size), Library.OutlineColor, 6, 1)
+        draw_liquid_glass(list_pos, list_size, 6, 1, Library.MainColor)
 
         -- Scrollbar for the dropdown list
         if needs_list_scroll then
             local sb_pos = list_pos:add(vector2(list_size.x - SB_WIDTH - 2, 4))
             draw_scrollbar(sb_pos, list_h - 8, content_h_dd, list_h,
                 dd_scroll, 1, mpressed, mdown, mp)
+            register_scroll_zone(
+                list_pos:add(vector2(0, 2)),
+                vector2(list_size.x, list_h - 4),
+                dd_scroll, content_h_dd, list_h)
         end
 
         local item_y = 2 - dd_scroll.offset
@@ -1457,6 +1667,8 @@ hook.add("render", "auth_photon_render", function()
         end
     end
 
+    apply_wheel_scroll(get_wheel_delta())
+
     -- ─────────────────────────────────────────
     --  Colour picker panel
     -- ─────────────────────────────────────────
@@ -1472,17 +1684,20 @@ hook.add("render", "auth_photon_render", function()
         local p_h = pad + sv_dim + pad
         local p_size = vector2(p_w, p_h)
 
-        local scr   = get_screen_size()
         local p_pos = e.layout.pos:add(vector2(e.layout.size.x + 8, 0))
-        if p_pos.x + p_w > scr.x - 4 then p_pos = vector2(e.layout.pos.x - p_w - 8, p_pos.y) end
-        if p_pos.y + p_h > scr.y - 4 then p_pos = vector2(p_pos.x, scr.y - p_h - 4) end
+        if p_pos.x + p_w > SCREEN.x - Library.ScreenPadding then
+            p_pos = vector2(e.layout.pos.x - p_w - 8, p_pos.y)
+        end
+        if p_pos.y + p_h > SCREEN.y - Library.ScreenPadding then
+            p_pos = vector2(p_pos.x, SCREEN.y - p_h - Library.ScreenPadding)
+        end
+        p_pos = clamp_position(p_pos, p_size)
 
         e.layout.picker_pos  = p_pos
         e.layout.picker_size = p_size
 
         draw_shadow(p_pos, p_size, 8, 1)
-        render.add_rect_filled(p_pos, p_pos:add(p_size), Library.MainColor, 8)
-        render.add_rect(p_pos, p_pos:add(p_size), Library.OutlineColor, 8, 1)
+        draw_liquid_glass(p_pos, p_size, 8, 1, Library.MainColor)
 
         local sv_pos  = p_pos:add(vector2(pad, pad))
         local sv_size = vector2(sv_dim, sv_dim)
@@ -1541,11 +1756,13 @@ hook.add("render", "auth_photon_render", function()
         local rcm_w   = 110
         local rcm_h   = #options * item_h + pad*2
         local rcm_sz  = vector2(rcm_w, rcm_h)
-        local scr     = get_screen_size()
-        local rp      = vector2(math.min(rcm.pos.x, scr.x-rcm_w-4), math.min(rcm.pos.y, scr.y-rcm_h-4))
+        local rp      = clamp_position(
+            vector2(math.min(rcm.pos.x, SCREEN.x - rcm_w - Library.ScreenPadding),
+                    math.min(rcm.pos.y, SCREEN.y - rcm_h - Library.ScreenPadding)),
+            rcm_sz)
         rcm.Alpha = rcm.Alpha + (1 - rcm.Alpha) * 0.12
         draw_shadow(rp, rcm_sz, 8, rcm.Alpha)
-        render.add_rect_filled(rp, rp:add(rcm_sz), apply_alpha(Library.MainColor, rcm.Alpha), 7)
+        draw_liquid_glass(rp, rcm_sz, 7, rcm.Alpha, Library.MainColor)
         for i, opt in ipairs(options) do
             local ip     = rp:add(vector2(pad, pad+(i-1)*item_h))
             local isz    = vector2(rcm_w-pad*2, item_h)
@@ -1569,12 +1786,13 @@ hook.add("render", "auth_photon_render", function()
     -- ─────────────────────────────────────────
     --  Notifications
     -- ─────────────────────────────────────────
-    local scr_w, scr_h = get_screen_size().x, get_screen_size().y
+    local scr_w, scr_h = SCREEN.x, SCREEN.y
     local nx, ny, vdir = 20, 50, 1
     if     Library.NotificationPosition=="Top Right"    then nx=scr_w-290; ny=50
     elseif Library.NotificationPosition=="Top Left"     then nx=20;        ny=50
     elseif Library.NotificationPosition=="Bottom Right" then nx=scr_w-290; ny=scr_h-60; vdir=-1
     elseif Library.NotificationPosition=="Bottom Left"  then nx=20;        ny=scr_h-60; vdir=-1 end
+    nx = math.clamp(nx, Library.ScreenPadding, scr_w - 290)
 
     local run_y = 0
     for i=#Library.Notifications,1,-1 do
@@ -1590,10 +1808,9 @@ hook.add("render", "auth_photon_render", function()
             local cur_y = ny + vdir*run_y
             if vdir==-1 then cur_y=cur_y-nsz.y end
             local slide_sign = (Library.NotificationPosition=="Top Right" or Library.NotificationPosition=="Bottom Right") and 1 or -1
-            local np = vector2(nx + slide_sign*n.OffsetX, cur_y)
+            local np = clamp_position(vector2(nx + slide_sign*n.OffsetX, cur_y), nsz)
             draw_shadow(np, nsz, 6, n.Alpha)
-            render.add_rect_filled(np, np:add(nsz), color(Library.MainColor.r,Library.MainColor.g,Library.MainColor.b,n.Alpha), 6)
-            render.add_rect(np, np:add(nsz), color(Library.OutlineColor.r,Library.OutlineColor.g,Library.OutlineColor.b,n.Alpha), 6, 1)
+            draw_liquid_glass(np, nsz, 6, n.Alpha, Library.MainColor)
             render.add_rect_filled(np:add(vector2(0,3)), np:add(vector2(2,nsz.y-3)), color(Library.AccentColor.r,Library.AccentColor.g,Library.AccentColor.b,n.Alpha), 2)
             render.add_text(np:add(vector2(10,5)), n.Text, color(Library.FontColor.r,Library.FontColor.g,Library.FontColor.b,n.Alpha))
             run_y = run_y + nsz.y + 6
