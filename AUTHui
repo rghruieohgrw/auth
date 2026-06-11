@@ -1247,7 +1247,7 @@ hook.add("render", "auth_photon_render", function()
                                     end
                                     render.add_text(ep, element.Text, apply_alpha(Library.SecondaryFontColor, op))
                                     local d_pos  = ep:add(vector2(0,18))
-                                    local d_size = vector2(efw_w, 22)
+                                    local d_size = vector2(efw_w, 20)
                                     element.Layout = {pos=d_pos, size=d_size, list_pos=vector2(0,0), list_size=vector2(0,0)}
                                     local is_hover = is_mouse_in_rect(d_pos, d_size)
                                     element.HoverAlpha = element.HoverAlpha + ((is_hover and 1 or 0) - element.HoverAlpha) * 0.07
@@ -1378,88 +1378,105 @@ hook.add("render", "auth_photon_render", function()
     end
 
     -- ─────────────────────────────────────────
-    --  Dropdown list (drawn above everything, with scrollbar)
-    -- ─────────────────────────────────────────
-    if Library.OpenedDropdown then
-        local e = Library.OpenedDropdown
-        -- Lazy ID
-        if not e._list_scroll_id then
-            e._list_scroll_id = "dd_" .. tostring(e)
-        end
+--  Dropdown list (clean & modern)
+-- ─────────────────────────────────────────
+if Library.OpenedDropdown then
+    local e = Library.OpenedDropdown
+    
+    if not e._list_scroll_id then
+        e._list_scroll_id = "dd_" .. tostring(e)
+    end
 
-        local max_visible = e.MaxVisible or 6
-        local total_items = #e.Values
-        local visible_items = math.min(total_items, max_visible)
-        local item_h = 18
-        local needs_list_scroll = total_items > max_visible
+    local max_visible = e.MaxVisible or 5
+    local total_items = #e.Values
+    local visible_items = math.min(total_items, max_visible)
+    local item_h = 24
+    local needs_list_scroll = total_items > max_visible
 
-        local list_pos  = e.Layout.pos:add(vector2(0, e.Layout.size.y+2))
-        local list_h    = visible_items * item_h + 4
-        local list_size = vector2(e.Layout.size.x, list_h)
-        e.Layout.list_pos  = list_pos
-        e.Layout.list_size = list_size
+    local list_pos = e.Layout.pos:add(vector2(0, e.Layout.size.y + 1))
+    local list_h = visible_items * item_h + 2
+    local list_size = vector2(e.Layout.size.x, list_h)
+    e.Layout.list_pos = list_pos
+    e.Layout.list_size = list_size
 
-        draw_shadow(list_pos, list_size, 6, 1)
-    render.add_rect_filled(list_pos, list_pos:add(list_size), Library.MainColor, 6)
-    render.add_rect(list_pos, list_pos:add(list_size), Library.OutlineColor, 6, 1)
+    -- Shadow
+    draw_shadow(list_pos, list_size, 4, 0.8)
+    
+    -- Background with rounded corners
+    render.add_rect_filled(list_pos, list_pos:add(list_size), Library.MainColor, 4)
+    render.add_rect(list_pos, list_pos:add(list_size), Library.OutlineColor, 4, 0.5)
 
-        local dd_scroll = get_scroll_state(e._list_scroll_id)
-        local content_h_dd = total_items * item_h + 4
-        clamp_scroll(dd_scroll, content_h_dd, list_h)
+    local dd_scroll = get_scroll_state(e._list_scroll_id)
+    local content_h_dd = total_items * item_h + 2
+    clamp_scroll(dd_scroll, content_h_dd, list_h)
 
-        if needs_list_scroll then
-            dd_scroll._track_h   = list_h - 8
-            dd_scroll._content_h = content_h_dd
-            dd_scroll._visible_h = list_h
-        end
+    if needs_list_scroll then
+        dd_scroll._track_h = list_h - 6
+        dd_scroll._content_h = content_h_dd
+        dd_scroll._visible_h = list_h
+    end
 
-        draw_shadow(list_pos, list_size, 6, 1)
-        render.add_rect_filled(list_pos, list_pos:add(list_size), Library.MainColor, 6)
-        render.add_rect(list_pos, list_pos:add(list_size), Library.OutlineColor, 6, 1)
+    -- Scrollbar (using existing SB_WIDTH constant)
+    if needs_list_scroll then
+        local sb_pos = list_pos:add(vector2(list_size.x - SB_WIDTH - 2, 3))
+        draw_scrollbar(sb_pos, list_h - 6, content_h_dd, list_h, dd_scroll, 1, mpressed, mdown, mp)
+    end
 
-        -- Scrollbar for the dropdown list
-        if needs_list_scroll then
-            local sb_pos = list_pos:add(vector2(list_size.x - SB_WIDTH - 2, 4))
-            draw_scrollbar(sb_pos, list_h - 8, content_h_dd, list_h,
-                dd_scroll, 1, mpressed, mdown, mp)
-        end
+    local item_y = 1 - dd_scroll.offset
+    local scrollbar_space = needs_list_scroll and (SB_WIDTH + 8) or 8
+    local text_max_w = list_size.x - scrollbar_space
 
-        local item_y = 2 - dd_scroll.offset
-        local text_max_w = list_size.x - (needs_list_scroll and (SB_WIDTH + SB_PAD + 8) or 8) - 8
+    for _, value in ipairs(e.Values) do
+        local ip = list_pos:add(vector2(2, item_y))
+        local isz = vector2(list_size.x - (needs_list_scroll and (SB_WIDTH + 4) or 4), item_h)
 
-        for _, value in ipairs(e.Values) do
-            local ip  = list_pos:add(vector2(1, item_y))
-            local isz = vector2(list_size.x - (needs_list_scroll and (SB_WIDTH + SB_PAD + 4) or 2), item_h)
-
-            -- Only render items within the visible list area
-            local visible_top = list_pos.y + 2
-            local visible_bot = list_pos.y + list_h - 2
-            if ip.y + item_h >= visible_top and ip.y <= visible_bot then
-                local is_sel = (e.Multi and e.Value[value]) or (e.Value==value)
-                local tc = is_sel and Library.AccentColor or Library.FontColor
-                if is_mouse_in_rect(ip, isz) and ip.y >= list_pos.y and ip.y + item_h <= list_pos.y + list_h then
-                    render.add_rect_filled(ip, ip:add(isz), apply_alpha(Library.AccentColor, 0.18), 4)
-                    tc = Library.AccentColor
-                    if mpressed then
-                        if e.Multi then e.Value[value]=not e.Value[value]; e:SetValue(e.Value)
-                        else e:SetValue(value); e.Open=false; Library.OpenedDropdown=nil end
+        local visible_top = list_pos.y + 1
+        local visible_bot = list_pos.y + list_h - 1
+        if ip.y + item_h >= visible_top and ip.y <= visible_bot then
+            local is_sel = (e.Multi and e.Value[value]) or (e.Value == value)
+            local tc = is_sel and Library.AccentColor or Library.FontColor
+            
+            if is_mouse_in_rect(ip, isz) then
+                render.add_rect_filled(ip, ip:add(isz), apply_alpha(Library.AccentColor, 0.12), 3)
+                tc = Library.AccentColor
+                
+                if mpressed then
+                    if e.Multi then
+                        e.Value[value] = not e.Value[value]
+                        e:SetValue(e.Value)
+                    else
+                        e:SetValue(value)
+                        e.Open = false
+                        Library.OpenedDropdown = nil
                     end
                 end
-                render.add_text(ip:add(vector2(6,2)), get_clipped_text(tostring(value), text_max_w), tc)
             end
-
-            item_y = item_y + item_h
+            
+            render.add_text(ip:add(vector2(8, 4)), get_clipped_text(tostring(value), text_max_w), tc)
         end
-
-        -- Mask overflow above/below the list box
-        if needs_list_scroll then
-            apply_clip_mask(
-                list_pos:add(vector2(0, 2)),
-                vector2(list_size.x, list_h - 4),
-                Library.MainColor, 1)
-            render.add_rect(list_pos, list_pos:add(list_size), Library.OutlineColor, 6, 1)
-        end
+        
+        item_y = item_y + item_h
     end
+
+    -- Subtle fade overlay (bug-free version)
+    if needs_list_scroll then
+        local fade_height = 8
+        render.add_rect_filled(
+            list_pos, 
+            list_pos:add(vector2(list_size.x, fade_height)), 
+            apply_alpha(Library.MainColor, 0.85), 
+            0
+        )
+        render.add_rect_filled(
+            list_pos:add(vector2(0, list_h - fade_height)), 
+            list_pos:add(vector2(list_size.x, list_h)), 
+            apply_alpha(Library.MainColor, 0.85), 
+            0
+        )
+        -- Redraw border on top so fades don't cover it
+        render.add_rect(list_pos, list_pos:add(list_size), Library.OutlineColor, 4, 0.5)
+    end
+end
 
     -- ─────────────────────────────────────────
     --  Colour picker panel
