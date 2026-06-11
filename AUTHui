@@ -1246,7 +1246,7 @@ hook.add("render", "auth_photon_render", function()
                                         element._list_scroll_id = "dd_list_" .. tostring(element) -- unique per element table
                                     end
                                     render.add_text(ep, element.Text, apply_alpha(Library.SecondaryFontColor, op))
-                                    local d_pos  = ep:add(vector2(0,18))
+                                    local d_pos  = ep:add(vector2(0,20))
                                     local d_size = vector2(efw_w, 20)
                                     element.Layout = {pos=d_pos, size=d_size, list_pos=vector2(0,0), list_size=vector2(0,0)}
                                     local is_hover = is_mouse_in_rect(d_pos, d_size)
