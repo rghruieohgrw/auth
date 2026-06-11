@@ -1390,7 +1390,7 @@ if Library.OpenedDropdown then
     local max_visible = e.MaxVisible or 5
     local total_items = #e.Values
     local visible_items = math.min(total_items, max_visible)
-    local item_h = 24
+    local item_h = 30
     local needs_list_scroll = total_items > max_visible
 
     local list_pos = e.Layout.pos:add(vector2(0, e.Layout.size.y + 1))
@@ -1452,7 +1452,7 @@ if Library.OpenedDropdown then
                 end
             end
             
-            render.add_text(ip:add(vector2(8, 4)), get_clipped_text(tostring(value), text_max_w), tc)
+            render.add_text(ip:add(vector2(8, 7)), get_clipped_text(tostring(value), text_max_w), tc)
         end
         
         item_y = item_y + item_h
