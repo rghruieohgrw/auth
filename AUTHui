@@ -1390,7 +1390,7 @@ hook.add("render", "auth_photon_render", function()
         local max_visible = e.MaxVisible or 6
         local total_items = #e.Values
         local visible_items = math.min(total_items, max_visible)
-        local item_h = 22
+        local item_h = 18
         local needs_list_scroll = total_items > max_visible
 
         local list_pos  = e.Layout.pos:add(vector2(0, e.Layout.size.y+2))
@@ -1398,6 +1398,10 @@ hook.add("render", "auth_photon_render", function()
         local list_size = vector2(e.Layout.size.x, list_h)
         e.Layout.list_pos  = list_pos
         e.Layout.list_size = list_size
+
+        draw_shadow(list_pos, list_size, 6, 1)
+    render.add_rect_filled(list_pos, list_pos:add(list_size), Library.MainColor, 6)
+    render.add_rect(list_pos, list_pos:add(list_size), Library.OutlineColor, 6, 1)
 
         local dd_scroll = get_scroll_state(e._list_scroll_id)
         local content_h_dd = total_items * item_h + 4
@@ -1441,7 +1445,7 @@ hook.add("render", "auth_photon_render", function()
                         else e:SetValue(value); e.Open=false; Library.OpenedDropdown=nil end
                     end
                 end
-                render.add_text(ip:add(vector2(8,3)), get_clipped_text(tostring(value), text_max_w), tc)
+                render.add_text(ip:add(vector2(6,2)), get_clipped_text(tostring(value), text_max_w), tc)
             end
 
             item_y = item_y + item_h
