@@ -55,19 +55,13 @@ local Library = {
     },
 
     -- ========== SCROLLBAR STATE ==========
-    -- Persistent scroll positions keyed by a unique string ID
-    -- ScrollState[id] = { offset = 0, dragging = false, drag_start_y = 0, drag_start_offset = 0 }
     ScrollState = {},
-
-    -- Active scrollbar drag (only one at a time)
-    -- { id = string, track_y = number, track_h = number, content_h = number, visible_h = number }
     ActiveScrollbar = nil,
-
     ScrollHoverZones = {},
     ScrollWheelSpeed = 30,
     ScreenPadding = 8,
 
-    -- Liquid glass theme (simulated blur — Photon has no native backdrop blur)
+    -- Liquid glass theme (simulated blur)
     Glass = {
         Enabled      = true,
         Transparency = 0.68,
@@ -641,7 +635,9 @@ local function apply_wheel_scroll(delta)
     for _, zone in ipairs(Library.ScrollHoverZones) do
         if is_mouse_in_rect(zone.pos, zone.size) then
             local area = zone.size.x * zone.size.y
-            if area < best_area then best_area = area; best = zone end
+            if area < best_area then
+                best_area = area; best = zone
+            end
         end
     end
     if best then
@@ -658,7 +654,6 @@ local function draw_shadow(pos, size, radius, alpha_mult)
     max_spread = math.min(max_spread, (SCREEN.x - pad) - (pos.x + size.x))
     max_spread = math.min(max_spread, (SCREEN.y - pad) - (pos.y + size.y))
     max_spread = math.max(0, max_spread)
-
     local layers = 8
     for i = 1, layers do
         local ideal = i * 3
@@ -678,7 +673,7 @@ local function draw_liquid_glass(pos, size, rounding, alpha_mult, tint_override)
     local g = Library.Glass
     local tint = tint_override or g.Tint
     local alpha = alpha_mult or 1
-
+    
     if not g.Enabled then
         render.add_rect_filled(pos, pos:add(size), apply_alpha(tint, alpha), rounding)
         render.add_rect(pos, pos:add(size), apply_alpha(Library.OutlineColor, alpha), rounding, 1)
@@ -693,102 +688,87 @@ local function draw_liquid_glass(pos, size, rounding, alpha_mult, tint_override)
             local off = i * 0.75
             local ba = base_a * 0.035 * (i / blur_layers)
             render.add_rect_filled(
-                pos:add(vector2(-off, -off)),
-                pos:add(size):add(vector2(off, off)),
-                color(tint.r, tint.g, tint.b, ba),
-                rounding + i)
+                pos:add(vector2(-off, -off)), 
+                pos:add(size):add(vector2(off, off)), 
+                color(tint.r, tint.g, tint.b, ba), 
+                rounding + i
+            )
         end
     end
 
-    render.add_rect_filled(pos, pos:add(size),
-        color(tint.r, tint.g, tint.b, base_a * 0.82), rounding)
+    render.add_rect_filled(pos, pos:add(size), color(tint.r, tint.g, tint.b, base_a * 0.82), rounding)
 
     local shine_h = math.min(size.y * 0.42, 36)
     for i = 0, shine_h - 1 do
         local t = i / math.max(1, shine_h)
         local ha = g.Highlight.a * (1 - t) * alpha * 0.55
         render.add_line(
-            pos:add(vector2(rounding, i + 1)),
-            vector2(pos.x + size.x - rounding, pos.y + i + 1),
-            color(g.Highlight.r, g.Highlight.g, g.Highlight.b, ha), 1)
+            pos:add(vector2(rounding, i + 1)), 
+            vector2(pos.x + size.x - rounding, pos.y + i + 1), 
+            color(g.Highlight.r, g.Highlight.g, g.Highlight.b, ha), 
+            1
+        )
     end
 
     local streak_a = g.Shine.a * alpha
     render.add_line(
-        pos:add(vector2(size.x * 0.08, 2)),
-        pos:add(vector2(size.x * 0.52, shine_h)),
-        color(g.Shine.r, g.Shine.g, g.Shine.b, streak_a), 1)
+        pos:add(vector2(size.x * 0.08, 2)), 
+        pos:add(vector2(size.x * 0.52, shine_h)), 
+        color(g.Shine.r, g.Shine.g, g.Shine.b, streak_a), 
+        1
+    )
 
     render.add_rect(pos, pos:add(size), apply_alpha(g.Border, alpha), rounding, 1)
     render.add_rect(
-        pos:add(vector2(1, 1)), pos:add(size):subtract(vector2(1, 1)),
-        color(1, 1, 1, 0.04 * alpha), math.max(0, rounding - 1), 1)
+        pos:add(vector2(1, 1)), 
+        pos:add(size):subtract(vector2(1, 1)), 
+        color(1, 1, 1, 0.04 * alpha), 
+        math.max(0, rounding - 1), 
+        1
+    )
 end
 
--- Returns or creates persistent scroll state for the given ID.
 local function get_scroll_state(id)
     if not Library.ScrollState[id] then
         Library.ScrollState[id] = {
-            offset       = 0,
-            dragging     = false,
-            drag_start_y = 0,
-            drag_start_off = 0,
+            offset = 0, dragging = false, drag_start_y = 0, drag_start_off = 0,
         }
     end
     return Library.ScrollState[id]
 end
 
--- Clamp scroll offset so content never scrolls too far.
 local function clamp_scroll(state, content_h, visible_h)
     local max_off = math.max(0, content_h - visible_h)
     state.offset = math.max(0, math.min(state.offset, max_off))
 end
 
--- Draw a vertical scrollbar and handle drag input.
--- Returns the (possibly updated) scroll offset.
---   track_pos   : vector2 top-left of the track
---   track_h     : pixel height of the visible track
---   content_h   : total pixel height of all content
---   visible_h   : pixel height of the clipped viewport
---   state       : scroll state table
---   alpha       : draw opacity multiplier
---   mpressed    : bool - LMB just pressed this frame
---   mdown       : bool - LMB held this frame
---   mp          : vector2 mouse position
 local function draw_scrollbar(track_pos, track_h, content_h, visible_h, state, alpha, mpressed, mdown, mp)
-    local max_off   = math.max(0, content_h - visible_h)
-    if max_off <= 0 then return end   -- nothing to scroll
+    local max_off = math.max(0, content_h - visible_h)
+    if max_off <= 0 then return end
 
-    local ratio     = visible_h / content_h
-    local thumb_h   = math.max(SB_MIN_THUMB, math.floor(track_h * ratio))
+    local ratio = visible_h / content_h
+    local thumb_h = math.max(SB_MIN_THUMB, math.floor(track_h * ratio))
     local thumb_travel = track_h - thumb_h
     local scroll_ratio = (max_off > 0) and (state.offset / max_off) or 0
-    local thumb_y   = track_pos.y + math.floor(thumb_travel * scroll_ratio)
+    local thumb_y = track_pos.y + math.floor(thumb_travel * scroll_ratio)
 
     local track_size = vector2(SB_WIDTH, track_h)
-    local thumb_pos  = vector2(track_pos.x, thumb_y)
+    local thumb_pos = vector2(track_pos.x, thumb_y)
     local thumb_size = vector2(SB_WIDTH, thumb_h)
 
-    -- Track background
-    render.add_rect_filled(track_pos, track_pos:add(track_size),
-        apply_alpha(color(0.08, 0.08, 0.10, 1), alpha), 3)
+    render.add_rect_filled(track_pos, track_pos:add(track_size), apply_alpha(color(0.08, 0.08, 0.10, 1), alpha), 3)
 
-    -- Thumb
     local is_thumb_hov = is_mouse_in_rect(thumb_pos, thumb_size)
-    local thumb_col = (state.dragging or is_thumb_hov)
-        and apply_alpha(Library.AccentColor, alpha)
-        or  apply_alpha(color(0.35, 0.35, 0.45, 1), alpha)
+    local thumb_col = (state.dragging or is_thumb_hov) and apply_alpha(Library.AccentColor, alpha) or apply_alpha(color(0.35, 0.35, 0.45, 1), alpha)
     render.add_rect_filled(thumb_pos, thumb_pos:add(thumb_size), thumb_col, 3)
 
-    -- Begin drag on thumb click
     if mpressed and is_thumb_hov and not Library.ActiveScrollbar then
-        state.dragging      = true
-        state.drag_start_y  = mp.y
+        state.dragging = true
+        state.drag_start_y = mp.y
         state.drag_start_off = state.offset
         Library.ActiveScrollbar = state
     end
 
-    -- Click on track (not thumb) → jump to position
     if mpressed and is_mouse_in_rect(track_pos, track_size) and not is_thumb_hov and not Library.ActiveScrollbar then
         local rel = (mp.y - track_pos.y - thumb_h / 2) / math.max(1, thumb_travel)
         state.offset = rel * max_off
@@ -796,9 +776,6 @@ local function draw_scrollbar(track_pos, track_h, content_h, visible_h, state, a
     end
 end
 
--- Mask overdraw: draw opaque rects above and below the visible area to hide
--- content that was rendered outside the clip region.
--- This is called AFTER the scrollable content is drawn.
 local function apply_clip_mask(clip_pos, clip_size, bg_color, alpha)
     local fill = apply_alpha(bg_color, alpha)
     if Library.Glass.Enabled then
@@ -807,24 +784,27 @@ local function apply_clip_mask(clip_pos, clip_size, bg_color, alpha)
             lerp(g.Tint.r, bg_color.r, 0.35),
             lerp(g.Tint.g, bg_color.g, 0.35),
             lerp(g.Tint.b, bg_color.b, 0.35),
-            (1 - g.Transparency) * (alpha or 1))
+            (1 - g.Transparency) * (alpha or 1)
+        )
     end
     local above_h = 60
     render.add_rect_filled(
-        clip_pos:subtract(vector2(0, above_h)),
-        vector2(clip_pos.x + clip_size.x, clip_pos.y),
-        fill, 0)
+        clip_pos:subtract(vector2(0, above_h)), 
+        vector2(clip_pos.x + clip_size.x, clip_pos.y), 
+        fill, 
+        0
+    )
     local below_h = 60
     render.add_rect_filled(
-        vector2(clip_pos.x, clip_pos.y + clip_size.y),
-        clip_pos:add(vector2(clip_size.x, clip_size.y + below_h)),
-        fill, 0)
+        vector2(clip_pos.x, clip_pos.y + clip_size.y), 
+        clip_pos:add(vector2(clip_size.x, clip_size.y + below_h)), 
+        fill, 
+        0
+    )
 end
 
--- ─────────────────────────────────────────────
---  Element base
--- ─────────────────────────────────────────────
 local ElementMethods = {}
+-- (Rest of the library methods and functions continue here...)
 function ElementMethods:OnChanged(func) self.OnChangedFunc = func; return self end
 function ElementMethods:SetTooltip(text) self.Tooltip = text; return self end
 
