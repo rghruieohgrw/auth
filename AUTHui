@@ -1,7 +1,7 @@
 -- Complete Working Photon UI Library
--- Fixed: Config saving/loading with dropdown, Menu shows when Photon menu is closed
--- Fixed: Keybinds, proper rendering, full functionality
--- Added: Drag-to-scroll scrollbars for Groupboxes, Dropdowns, and Tab containers
+-- Fixed: Scrollbar layout no longer breaks/clips the main menu
+-- Fixed: Overdraw masking only applied when scroll is actually needed
+-- Rewritten: Dropdown list rendering (clean, clipped, scrollable, no layout bugs)
 
 -- Resolve local player username at load time
 local _players = game:get_service("Players")
@@ -53,13 +53,9 @@ local Library = {
         PendingTab = nil
     },
 
-    -- ========== SCROLLBAR STATE ==========
     -- Persistent scroll positions keyed by a unique string ID
-    -- ScrollState[id] = { offset = 0, dragging = false, drag_start_y = 0, drag_start_offset = 0 }
     ScrollState = {},
-
     -- Active scrollbar drag (only one at a time)
-    -- { id = string, track_y = number, track_h = number, content_h = number, visible_h = number }
     ActiveScrollbar = nil,
 
     -- ========== CONFIG SYSTEM ==========
@@ -533,58 +529,54 @@ local function draw_shadow(pos, size, radius, alpha_mult)
 end
 
 -- ─────────────────────────────────────────────
---  Scrollbar helpers
+--  Scrollbar system
 --
---  Photon has no scissor/clip API, so we simulate clipping by drawing filled
---  rectangles over the overflow areas (overdraw masking).  The content is
---  drawn at a negative Y offset equal to scroll_offset, then two opaque
---  mask rects cover anything above or below the visible window.
---
---  Scrollbar constants
+--  KEY FIX: Scrollbars are ONLY drawn and activated when content_h
+--  genuinely exceeds visible_h. The overdraw-mask trick (apply_clip_mask)
+--  is now scoped tightly: it only fires for groupboxes/tab containers
+--  that have MaxHeight set AND are overflowing. Normal groupboxes
+--  (MaxHeight == nil) never get masked, so the main menu is never cut off.
 -- ─────────────────────────────────────────────
-local SB_WIDTH       = 5   -- px wide track
-local SB_MIN_THUMB   = 16  -- minimum thumb height in px
-local SB_PAD         = 3   -- gap between content and track
+local SB_WIDTH     = 4    -- scrollbar track width in px
+local SB_MIN_THUMB = 14   -- minimum thumb height in px
+local SB_PAD       = 4    -- gap between content column and track
 
--- Returns or creates persistent scroll state for the given ID.
 local function get_scroll_state(id)
     if not Library.ScrollState[id] then
         Library.ScrollState[id] = {
-            offset       = 0,
-            dragging     = false,
-            drag_start_y = 0,
+            offset         = 0,
+            dragging       = false,
+            drag_start_y   = 0,
             drag_start_off = 0,
+            _track_h       = 0,
+            _content_h     = 0,
+            _visible_h     = 0,
         }
     end
     return Library.ScrollState[id]
 end
 
--- Clamp scroll offset so content never scrolls too far.
 local function clamp_scroll(state, content_h, visible_h)
     local max_off = math.max(0, content_h - visible_h)
     state.offset = math.max(0, math.min(state.offset, max_off))
 end
 
--- Draw a vertical scrollbar and handle drag input.
--- Returns the (possibly updated) scroll offset.
---   track_pos   : vector2 top-left of the track
---   track_h     : pixel height of the visible track
---   content_h   : total pixel height of all content
---   visible_h   : pixel height of the clipped viewport
---   state       : scroll state table
---   alpha       : draw opacity multiplier
---   mpressed    : bool - LMB just pressed this frame
---   mdown       : bool - LMB held this frame
---   mp          : vector2 mouse position
+-- Draw a vertical scrollbar track + thumb. Returns nothing; all state
+-- mutation happens through the shared Library.ActiveScrollbar mechanism.
 local function draw_scrollbar(track_pos, track_h, content_h, visible_h, state, alpha, mpressed, mdown, mp)
-    local max_off   = math.max(0, content_h - visible_h)
-    if max_off <= 0 then return end   -- nothing to scroll
+    local max_off = math.max(0, content_h - visible_h)
+    if max_off <= 0 then return end
 
-    local ratio     = visible_h / content_h
-    local thumb_h   = math.max(SB_MIN_THUMB, math.floor(track_h * ratio))
+    -- Store layout so the global drag handler can compute deltas.
+    state._track_h   = track_h
+    state._content_h = content_h
+    state._visible_h = visible_h
+
+    local ratio      = visible_h / content_h
+    local thumb_h    = math.max(SB_MIN_THUMB, math.floor(track_h * ratio))
     local thumb_travel = track_h - thumb_h
     local scroll_ratio = (max_off > 0) and (state.offset / max_off) or 0
-    local thumb_y   = track_pos.y + math.floor(thumb_travel * scroll_ratio)
+    local thumb_y    = track_pos.y + math.floor(thumb_travel * scroll_ratio)
 
     local track_size = vector2(SB_WIDTH, track_h)
     local thumb_pos  = vector2(track_pos.x, thumb_y)
@@ -592,46 +584,45 @@ local function draw_scrollbar(track_pos, track_h, content_h, visible_h, state, a
 
     -- Track background
     render.add_rect_filled(track_pos, track_pos:add(track_size),
-        apply_alpha(color(0.08, 0.08, 0.10, 1), alpha), 3)
+        apply_alpha(color(0.07, 0.07, 0.09, 1), alpha), 3)
 
-    -- Thumb
+    -- Thumb colour: accent when dragging/hovering, muted otherwise
     local is_thumb_hov = is_mouse_in_rect(thumb_pos, thumb_size)
     local thumb_col = (state.dragging or is_thumb_hov)
         and apply_alpha(Library.AccentColor, alpha)
-        or  apply_alpha(color(0.35, 0.35, 0.45, 1), alpha)
+        or  apply_alpha(color(0.30, 0.30, 0.40, 1), alpha)
     render.add_rect_filled(thumb_pos, thumb_pos:add(thumb_size), thumb_col, 3)
 
-    -- Begin drag on thumb click
+    -- Begin thumb drag
     if mpressed and is_thumb_hov and not Library.ActiveScrollbar then
-        state.dragging      = true
-        state.drag_start_y  = mp.y
+        state.dragging       = true
+        state.drag_start_y   = mp.y
         state.drag_start_off = state.offset
         Library.ActiveScrollbar = state
     end
 
-    -- Click on track (not thumb) → jump to position
+    -- Click on track (not thumb) → jump to that position
     if mpressed and is_mouse_in_rect(track_pos, track_size) and not is_thumb_hov and not Library.ActiveScrollbar then
-        local rel = (mp.y - track_pos.y - thumb_h / 2) / math.max(1, thumb_travel)
+        local rel = (mp.y - track_pos.y - thumb_h * 0.5) / math.max(1, thumb_travel)
         state.offset = rel * max_off
         clamp_scroll(state, content_h, visible_h)
     end
 end
 
--- Mask overdraw: draw opaque rects above and below the visible area to hide
--- content that was rendered outside the clip region.
--- This is called AFTER the scrollable content is drawn.
+-- Mask overdraw above and below a clipping region.
+-- ONLY called when a groupbox actually has MaxHeight capping active.
+-- 'bg_color' must exactly match the surface behind the groupbox so the
+-- overdraw is invisible.
 local function apply_clip_mask(clip_pos, clip_size, bg_color, alpha)
-    -- Area above the clipping window
-    local above_h = 60  -- generous overdraw coverage
+    -- Cover the strip immediately above the content area
     render.add_rect_filled(
-        clip_pos:subtract(vector2(0, above_h)),
+        clip_pos:subtract(vector2(0, 64)),
         vector2(clip_pos.x + clip_size.x, clip_pos.y),
         apply_alpha(bg_color, alpha), 0)
-    -- Area below the clipping window
-    local below_h = 60
+    -- Cover the strip immediately below
     render.add_rect_filled(
         vector2(clip_pos.x, clip_pos.y + clip_size.y),
-        clip_pos:add(vector2(clip_size.x, clip_size.y + below_h)),
+        clip_pos:add(vector2(clip_size.x, clip_size.y + 64)),
         apply_alpha(bg_color, alpha), 0)
 end
 
@@ -725,22 +716,20 @@ function Library:CreateWindow(config)
         ActiveTab = nil,
         Alpha     = config.AutoShow and 1 or 0,
         TargetAlpha = config.AutoShow and 1 or 0,
-        -- Tab container scroll state ID (set during render, unique per window)
         TabScrollId = nil,
     }
 
     function window:AddTab(name)
         local tab = {Name=name, Parent=window, Groupboxes={}}
-        function tab:AddLeftGroupbox(name,info)  return self:AddGroupbox({Name=name,Side="Left",  Dependencies=info and info.Dependencies or nil}) end
-        function tab:AddRightGroupbox(name,info) return self:AddGroupbox({Name=name,Side="Right", Dependencies=info and info.Dependencies or nil}) end
+        function tab:AddLeftGroupbox(name,info)  return self:AddGroupbox({Name=name,Side="Left",  Dependencies=info and info.Dependencies or nil, MaxHeight=info and info.MaxHeight or nil}) end
+        function tab:AddRightGroupbox(name,info) return self:AddGroupbox({Name=name,Side="Right", Dependencies=info and info.Dependencies or nil, MaxHeight=info and info.MaxHeight or nil}) end
         function tab:AddGroupbox(info)
             local groupbox = {
                 Name=info.Name, Side=info.Side or "Left",
                 Parent=tab, Elements={}, Dependencies=info.Dependencies,
-                -- MaxHeight: set this to limit the groupbox height and enable scrolling.
-                -- nil = auto-size (original behaviour, no scroll).
+                -- MaxHeight: nil = auto-size (no scrollbar, no clipping).
+                -- Set an integer to cap height and enable per-groupbox scrolling.
                 MaxHeight = info.MaxHeight or nil,
-                -- Unique scroll ID, set lazily during render.
                 _scroll_id = nil,
             }
 
@@ -752,9 +741,7 @@ function Library:CreateWindow(config)
                 return true
             end
 
-            function groupbox:SetMaxHeight(h)
-                self.MaxHeight = h
-            end
+            function groupbox:SetMaxHeight(h) self.MaxHeight = h end
 
             function groupbox:AddToggle(id,info)
                 local el=CreateElement({Id=id,Type="Toggle",Text=info.Text,Value=info.Default or false,Callback=info.Callback,Height=28,Tooltip=info.Tooltip,Risky=info.Risky,SwitchAnim=info.Default and 1 or 0},ToggleMethods)
@@ -770,10 +757,19 @@ function Library:CreateWindow(config)
                 table.insert(self.Elements,el); return el
             end
             function groupbox:AddDropdown(id,info)
-                local el=CreateElement({Id=id,Type="Dropdown",Text=info.Text,Value=info.Default and info.Values[info.Default] or info.Values[1],Values=info.Values,Open=false,Callback=info.Callback,Height=44,Multi=info.Multi,Tooltip=info.Tooltip,HoverAlpha=0,
-                    -- MaxVisible: max items shown before the list itself scrolls.
+                local el=CreateElement({
+                    Id=id, Type="Dropdown",
+                    Text=info.Text,
+                    Value=info.Default and info.Values[info.Default] or info.Values[1],
+                    Values=info.Values, Open=false,
+                    Callback=info.Callback, Height=44,
+                    Multi=info.Multi, Tooltip=info.Tooltip,
+                    HoverAlpha=0,
                     MaxVisible=info.MaxVisible or 6,
-                    _list_scroll_id=nil,
+                    -- Layout written each frame so the global dropdown renderer can find it.
+                    _dd_layout = nil,
+                    -- Per-list scroll state ID.
+                    _list_scroll_id = nil,
                 },DropdownMethods)
                 if info.Multi then el.Value=info.Default or {} end
                 table.insert(self.Elements,el); Library.Options[id]=el; return el
@@ -856,6 +852,152 @@ local function draw_watermark()
 end
 
 -- ─────────────────────────────────────────────
+--  Dropdown renderer  (REWRITTEN)
+--
+--  Draws the floating dropdown list. Called once per frame at the very
+--  end of the render hook so it always appears on top of everything.
+--
+--  Layout:
+--    ┌─────────────────────────────────────┐
+--    │ label text                          │
+--    ├─────────────────────────────────────┤  ← d_pos / d_size  (the control box)
+--    │  selected value          ▼          │
+--    └─────────────────────────────────────┘
+--    ┌─────────────────────────────────────┐  ← list_pos / list_size  (popup)
+--    │  item 1                             │
+--    │  item 2   (highlighted / checked)   │
+--    │  ...                       │scroll│ │
+--    └─────────────────────────────────────┘
+-- ─────────────────────────────────────────────
+local DD_ITEM_H    = 22   -- height of each item row
+local DD_INNER_PAD = 6    -- horizontal text padding inside the list
+local DD_V_PAD     = 4    -- top/bottom padding inside list box
+
+local function draw_dropdown_list(e, mpressed, mdown, mp)
+    if not e._dd_layout then return end
+    local layout = e._dd_layout
+
+    -- Lazy scroll ID
+    if not e._list_scroll_id then
+        e._list_scroll_id = "dd_" .. tostring(e)
+    end
+
+    local total_items   = #e.Values
+    if total_items == 0 then
+        -- Empty list: close and bail
+        e.Open = false
+        Library.OpenedDropdown = nil
+        return
+    end
+
+    local max_visible   = e.MaxVisible or 6
+    local visible_items = math.min(total_items, max_visible)
+    local needs_scroll  = total_items > max_visible
+
+    -- List box dimensions
+    local list_w = layout.d_size.x
+    local list_h = visible_items * DD_ITEM_H + DD_V_PAD * 2
+    -- Inner text column width (subtract scrollbar space when needed)
+    local text_col_w = list_w - DD_INNER_PAD * 2
+                       - (needs_scroll and (SB_WIDTH + SB_PAD) or 0)
+
+    -- Position: try below the control; flip above if it would go off screen
+    local scr = get_screen_size()
+    local list_pos = layout.d_pos:add(vector2(0, layout.d_size.y + 2))
+    if list_pos.y + list_h > scr.y - 4 then
+        list_pos = vector2(list_pos.x, layout.d_pos.y - list_h - 2)
+    end
+    local list_size = vector2(list_w, list_h)
+
+    -- Write back so the dismiss-on-outside-click check can use it
+    layout.list_pos  = list_pos
+    layout.list_size = list_size
+
+    -- Scroll state
+    local scroll         = get_scroll_state(e._list_scroll_id)
+    local content_h      = total_items * DD_ITEM_H + DD_V_PAD * 2
+    clamp_scroll(scroll, content_h, list_h)
+
+    -- Background + border
+    draw_shadow(list_pos, list_size, 6, 1)
+    render.add_rect_filled(list_pos, list_pos:add(list_size), Library.MainColor, 6)
+    render.add_rect(list_pos, list_pos:add(list_size), Library.OutlineColor, 6, 1)
+
+    -- Scrollbar
+    if needs_scroll then
+        local sb_x   = list_pos.x + list_w - SB_WIDTH - 2
+        local sb_pos = vector2(sb_x, list_pos.y + DD_V_PAD)
+        local sb_h   = list_h - DD_V_PAD * 2
+        draw_scrollbar(sb_pos, sb_h, content_h, list_h, scroll, 1, mpressed, mdown, mp)
+    end
+
+    -- Items
+    local clip_top = list_pos.y + DD_V_PAD
+    local clip_bot = list_pos.y + list_h - DD_V_PAD
+
+    for i, value in ipairs(e.Values) do
+        local item_y  = list_pos.y + DD_V_PAD + (i - 1) * DD_ITEM_H - scroll.offset
+        local item_pos  = vector2(list_pos.x + 1, item_y)
+        local item_size = vector2(list_w - 2 - (needs_scroll and (SB_WIDTH + SB_PAD) or 0), DD_ITEM_H)
+
+        -- Skip items fully outside the visible clip zone
+        if item_y + DD_ITEM_H < clip_top or item_y > clip_bot then
+            goto continue_dd_item
+        end
+
+        local is_selected = e.Multi and e.Value[value] or (e.Value == value)
+        local is_hovered  = is_mouse_in_rect(item_pos, item_size)
+                            -- Only register hover when item is actually within the list box
+                            and item_y >= clip_top - DD_ITEM_H * 0.5
+                            and item_y + DD_ITEM_H <= clip_bot + DD_ITEM_H * 0.5
+
+        -- Highlight background
+        if is_selected then
+            render.add_rect_filled(item_pos, item_pos:add(item_size),
+                apply_alpha(Library.AccentColor, 0.14), 4)
+        end
+        if is_hovered then
+            render.add_rect_filled(item_pos, item_pos:add(item_size),
+                apply_alpha(Library.AccentColor, 0.22), 4)
+        end
+
+        -- Text colour
+        local tc = (is_selected or is_hovered) and Library.AccentColor or Library.FontColor
+        render.add_text(
+            vector2(item_pos.x + DD_INNER_PAD, item_y + (DD_ITEM_H - render.get_text_size("A").y) * 0.5),
+            get_clipped_text(tostring(value), text_col_w), tc)
+
+        -- Click handler
+        if is_hovered and mpressed then
+            if e.Multi then
+                e.Value[value] = not e.Value[value]
+                e:SetValue(e.Value)
+            else
+                e:SetValue(value)
+                e.Open = false
+                Library.OpenedDropdown = nil
+            end
+        end
+
+        ::continue_dd_item::
+    end
+
+    -- Mask rows that bled outside the clipping zone (overdraw masking for items only)
+    -- Top fringe
+    render.add_rect_filled(
+        vector2(list_pos.x, list_pos.y - 32),
+        vector2(list_pos.x + list_w, list_pos.y + DD_V_PAD),
+        Library.MainColor, 0)
+    -- Bottom fringe
+    render.add_rect_filled(
+        vector2(list_pos.x, list_pos.y + list_h - DD_V_PAD),
+        vector2(list_pos.x + list_w, list_pos.y + list_h + 32),
+        Library.MainColor, 0)
+    -- Re-draw border on top of the mask
+    render.add_rect(list_pos, list_pos:add(list_size), Library.OutlineColor, 6, 1)
+end
+
+-- ─────────────────────────────────────────────
 --  Main render hook
 -- ─────────────────────────────────────────────
 hook.add("render", "auth_photon_render", function()
@@ -884,21 +1026,16 @@ hook.add("render", "auth_photon_render", function()
 
     -- ── release active scrollbar drag ──
     if Library.ActiveScrollbar then
-        if mdown then
-            local s = Library.ActiveScrollbar
-            -- actual scroll delta is computed during draw_scrollbar via drag
-        else
+        if not mdown then
             Library.ActiveScrollbar.dragging = false
             Library.ActiveScrollbar = nil
         end
     end
 
-    -- ── handle active scrollbar thumb drag motion ──
-    -- The thumb drag maths live here so we can access the full layout computed
-    -- by draw_scrollbar on the previous frame, stored in _last_drag_layout.
+    -- ── continue active scrollbar thumb drag ──
     if Library.ActiveScrollbar and mdown then
         local s = Library.ActiveScrollbar
-        if s._track_h and s._content_h and s._visible_h then
+        if s._track_h and s._track_h > 0 and s._content_h and s._visible_h then
             local max_off    = math.max(0, s._content_h - s._visible_h)
             local ratio      = s._visible_h / s._content_h
             local thumb_h    = math.max(SB_MIN_THUMB, math.floor(s._track_h * ratio))
@@ -915,8 +1052,14 @@ hook.add("render", "auth_photon_render", function()
     if mpressed and Library.ModalOpen then
         if Library.OpenedDropdown then
             local dd = Library.OpenedDropdown
-            if dd.Layout and not (is_mouse_in_rect(dd.Layout.pos, dd.Layout.size) or is_mouse_in_rect(dd.Layout.list_pos, dd.Layout.list_size)) then
-                dd.Open=false; Library.OpenedDropdown=nil
+            local layout = dd._dd_layout
+            if layout then
+                local in_control = is_mouse_in_rect(layout.d_pos, layout.d_size)
+                local in_list    = layout.list_pos and is_mouse_in_rect(layout.list_pos, layout.list_size)
+                if not in_control and not in_list then
+                    dd.Open = false
+                    Library.OpenedDropdown = nil
+                end
             end
         end
         if Library.ActiveColorPicker then
@@ -1001,7 +1144,6 @@ hook.add("render", "auth_photon_render", function()
             local wa = window.Alpha
             if wa < 0.01 then goto continue_window end
 
-            -- Lazy-init unique IDs
             if not window.TabScrollId then
                 window.TabScrollId = "win_tab_" .. tostring(win_idx)
             end
@@ -1040,118 +1182,117 @@ hook.add("render", "auth_photon_render", function()
                 tab_x = tab_x + tw + 6
             end
 
-            -- ── tab content area (scrollable) ──
-            -- The tab container itself can scroll vertically if its total
-            -- groupbox height exceeds the available area.
+            -- ── tab content area ──
+            -- The tab container scrolls only when groupboxes overflow.
+            -- When MaxHeight is nil on ALL groupboxes the container expands
+            -- naturally and no masking is applied.
             local tab_container_pos  = msp:add(vector2(0, 36))
             local tab_container_size = vector2(window.Size.x-24, mss.y - 36)
 
             if window.ActiveTab and anim.CurrentAlpha > 0 then
                 local op = anim.CurrentAlpha * wa
 
-                -- First pass: measure total content height needed by the active tab.
-                local left_total_h  = 0
-                local right_total_h = 0
+                -- Measure total height the tab content wants
+                local left_h  = 0
+                local right_h = 0
                 for _, groupbox in ipairs(window.ActiveTab.Groupboxes) do
                     if groupbox:IsVisible() then
-                        local content_h = 32
-                        for _,e in ipairs(groupbox.Elements) do content_h=content_h+e.Height end
-                        -- Honour MaxHeight capping for groupbox-level scroll
-                        local used_h = groupbox.MaxHeight and math.min(content_h, groupbox.MaxHeight) or content_h
+                        local raw_h = 32
+                        for _,e in ipairs(groupbox.Elements) do raw_h = raw_h + e.Height end
+                        local used_h = groupbox.MaxHeight and math.min(raw_h, groupbox.MaxHeight) or raw_h
                         if groupbox.Side == "Left" then
-                            left_total_h = left_total_h + used_h + 12
+                            left_h = left_h + used_h + 12
                         else
-                            right_total_h = right_total_h + used_h + 12
+                            right_h = right_h + used_h + 12
                         end
                     end
                 end
-                local tab_content_h = math.max(left_total_h, right_total_h)
+                local tab_content_h = math.max(left_h, right_h)
 
-                -- Tab-level scroll state
-                local tab_scroll_state = get_scroll_state(window.TabScrollId)
+                -- Only enable tab-level scroll when content genuinely overflows.
                 local tab_needs_scroll = tab_content_h > tab_container_size.y
-                clamp_scroll(tab_scroll_state, tab_content_h, tab_container_size.y)
 
-                -- Scrollbar for the whole tab container (right edge of window)
+                -- Tab scroll state
+                local tab_scroll = get_scroll_state(window.TabScrollId)
+                clamp_scroll(tab_scroll, tab_content_h, tab_container_size.y)
+
+                -- Scrollbar for the whole tab (right edge of inner area)
                 if tab_needs_scroll then
-                    local sb_track_pos = tab_container_pos:add(vector2(tab_container_size.x - SB_WIDTH, 4))
-                    local sb_track_h   = tab_container_size.y - 8
-
-                    -- Store layout on state so the drag handler above can use it
-                    tab_scroll_state._track_h   = sb_track_h
-                    tab_scroll_state._content_h = tab_content_h
-                    tab_scroll_state._visible_h = tab_container_size.y
-
-                    draw_scrollbar(sb_track_pos, sb_track_h,
+                    local sb_pos = tab_container_pos:add(vector2(tab_container_size.x - SB_WIDTH, 4))
+                    local sb_h   = tab_container_size.y - 8
+                    draw_scrollbar(sb_pos, sb_h,
                         tab_content_h, tab_container_size.y,
-                        tab_scroll_state, op, mpressed, mdown, mp)
+                        tab_scroll, op, mpressed, mdown, mp)
                 end
 
-                local scroll_off    = tab_scroll_state.offset
-                local content_area  = tab_container_pos:add(vector2(4, 4 - scroll_off))
+                local scroll_off = tab_scroll.offset
+                local inner_w    = tab_container_size.x
+                                   - (tab_needs_scroll and (SB_WIDTH + SB_PAD) or 0)
+                                   - 8
+                local content_origin = tab_container_pos:add(vector2(4, 4 - scroll_off))
                 local left_y, right_y = 0, 0
-                -- Effective inner width (subtract scrollbar space when active)
-                local inner_w = tab_container_size.x - (tab_needs_scroll and (SB_WIDTH + SB_PAD) or 0) - 8
 
                 for gb_idx, groupbox in ipairs(window.ActiveTab.Groupboxes) do
                     if groupbox:IsVisible() then
-                        -- Lazy-init unique scroll ID per groupbox
                         if not groupbox._scroll_id then
-                            groupbox._scroll_id = "gb_" .. tostring(win_idx) .. "_" .. tostring(gb_idx)
+                            groupbox._scroll_id = "gb_"..tostring(win_idx).."_"..tostring(gb_idx)
                         end
 
-                        local side_off = (groupbox.Side=="Left") and 0 or (inner_w/2 + 2)
-                        local y_off    = (groupbox.Side=="Left") and left_y or right_y
-                        local group_pos = content_area:add(vector2(side_off, y_off))
+                        local side_off  = (groupbox.Side=="Left") and 0 or (inner_w/2 + 2)
+                        local y_off     = (groupbox.Side=="Left") and left_y or right_y
+                        local group_pos = content_origin:add(vector2(side_off, y_off))
 
-                        -- Measure raw content height of this groupbox
-                        local raw_content_h = 32
-                        for _,e in ipairs(groupbox.Elements) do raw_content_h=raw_content_h+e.Height end
+                        -- Raw content height of this groupbox
+                        local raw_h = 32
+                        for _,e in ipairs(groupbox.Elements) do raw_h = raw_h + e.Height end
 
-                        -- Determine capped visible height
-                        local group_visible_h = groupbox.MaxHeight or raw_content_h
-                        local group_size = vector2(inner_w/2 - 6, group_visible_h)
-                        local gb_needs_scroll = (raw_content_h > group_visible_h)
+                        -- Visible height: capped by MaxHeight if set, otherwise natural
+                        local gb_visible_h  = groupbox.MaxHeight and math.min(raw_h, groupbox.MaxHeight) or raw_h
+                        local gb_size       = vector2(inner_w/2 - 6, gb_visible_h)
+                        local gb_needs_scroll = groupbox.MaxHeight ~= nil and raw_h > gb_visible_h
 
-                        -- Groupbox-level scroll state
-                        local gb_scroll_state = get_scroll_state(groupbox._scroll_id)
-                        clamp_scroll(gb_scroll_state, raw_content_h, group_visible_h)
-
+                        -- Groupbox scroll state (only allocated when MaxHeight is set)
+                        local gb_scroll = gb_needs_scroll and get_scroll_state(groupbox._scroll_id)
+                                         or { offset = 0 }
                         if gb_needs_scroll then
-                            gb_scroll_state._track_h   = group_visible_h - 8
-                            gb_scroll_state._content_h = raw_content_h
-                            gb_scroll_state._visible_h = group_visible_h
+                            clamp_scroll(gb_scroll, raw_h, gb_visible_h)
                         end
 
-                        draw_shadow(group_pos, group_size, 8, op * 0.5)
-                        render.add_rect_filled(group_pos, group_pos:add(group_size), apply_alpha(Library.MainColor, op), 8)
-                        render.add_rect(group_pos, group_pos:add(group_size), apply_alpha(Library.OutlineColor, op), 8, 1)
+                        draw_shadow(group_pos, gb_size, 8, op * 0.5)
+                        render.add_rect_filled(group_pos, group_pos:add(gb_size), apply_alpha(Library.MainColor, op), 8)
+                        render.add_rect(group_pos, group_pos:add(gb_size), apply_alpha(Library.OutlineColor, op), 8, 1)
                         render.add_text(group_pos:add(vector2(10,8)), groupbox.Name, apply_alpha(Library.FontColor, op))
 
-                        -- Groupbox scrollbar
+                        -- Groupbox scrollbar (only when MaxHeight is explicitly set and overflowing)
                         if gb_needs_scroll then
-                            local sb_pos = group_pos:add(vector2(group_size.x - SB_WIDTH - 2, 30))
-                            local sb_h   = group_visible_h - 34
-                            draw_scrollbar(sb_pos, sb_h, raw_content_h, group_visible_h,
-                                gb_scroll_state, op, mpressed, mdown, mp)
+                            local sb_pos = group_pos:add(vector2(gb_size.x - SB_WIDTH - 2, 30))
+                            local sb_h   = gb_visible_h - 34
+                            gb_scroll._track_h   = sb_h
+                            gb_scroll._content_h = raw_h
+                            gb_scroll._visible_h = gb_visible_h
+                            draw_scrollbar(sb_pos, sb_h, raw_h, gb_visible_h, gb_scroll, op, mpressed, mdown, mp)
                         end
 
-                        local gb_scroll_off = gb_scroll_state.offset
-                        -- Inner element width (subtract scrollbar space when active)
-                        local efw_w = group_size.x - 20 - (gb_needs_scroll and (SB_WIDTH + SB_PAD) or 0)
+                        -- Element column width (subtract scrollbar when needed)
+                        local efw_w = gb_size.x - 20
+                                      - (gb_needs_scroll and (SB_WIDTH + SB_PAD) or 0)
 
-                        local element_y = 30 - gb_scroll_off
+                        local element_y = 30 - gb_scroll.offset
+
                         for _, element in ipairs(groupbox.Elements) do
-                            -- Only interact with elements that are within the visible clip region
                             local ep  = group_pos:add(vector2(10, element_y))
                             local efw = vector2(efw_w, element.Height)
 
-                            -- Clip check: element must be within the groupbox visible bounds
-                            local elem_top    = ep.y
-                            local elem_bot    = ep.y + element.Height
-                            local clip_top    = group_pos.y + 28
-                            local clip_bot    = group_pos.y + group_visible_h - 2
-                            local is_clipped  = (elem_bot < clip_top) or (elem_top > clip_bot)
+                            -- Clip test: only skip interaction/draw for elements outside a
+                            -- MaxHeight-capped groupbox; never clip in normal groupboxes.
+                            local is_clipped = false
+                            if gb_needs_scroll then
+                                local elem_top = ep.y
+                                local elem_bot = ep.y + element.Height
+                                local clip_top = group_pos.y + 28
+                                local clip_bot = group_pos.y + gb_visible_h - 2
+                                is_clipped = (elem_bot < clip_top) or (elem_top > clip_bot)
+                            end
 
                             if not is_clipped then
                                 if is_mouse_in_rect(ep, efw) and element.Tooltip then
@@ -1241,34 +1382,52 @@ hook.add("render", "auth_photon_render", function()
 
                                 -- ── Dropdown ──
                                 elseif element.Type=="Dropdown" then
-                                    -- Lazy-init list scroll ID
-                                    if not element._list_scroll_id then
-                                        element._list_scroll_id = "dd_list_" .. tostring(element) -- unique per element table
-                                    end
                                     render.add_text(ep, element.Text, apply_alpha(Library.SecondaryFontColor, op))
-                                    local d_pos  = ep:add(vector2(0,18))
+                                    local d_pos  = ep:add(vector2(0, 18))
                                     local d_size = vector2(efw_w, 22)
-                                    element.Layout = {pos=d_pos, size=d_size, list_pos=vector2(0,0), list_size=vector2(0,0)}
+
+                                    -- Write layout so the end-of-frame dropdown renderer can use it.
+                                    -- Also used for dismiss-on-outside-click.
+                                    if not element._dd_layout then element._dd_layout = {} end
+                                    element._dd_layout.d_pos   = d_pos
+                                    element._dd_layout.d_size  = d_size
+                                    element._dd_layout.list_pos  = element._dd_layout.list_pos  or vector2(0,0)
+                                    element._dd_layout.list_size = element._dd_layout.list_size or vector2(0,0)
+
+                                    -- Hover animation
                                     local is_hover = is_mouse_in_rect(d_pos, d_size)
                                     element.HoverAlpha = element.HoverAlpha + ((is_hover and 1 or 0) - element.HoverAlpha) * 0.07
                                     local bg = color(
                                         lerp(Library.BackgroundColor.r, Library.MainColor.r, element.HoverAlpha),
                                         lerp(Library.BackgroundColor.g, Library.MainColor.g, element.HoverAlpha),
                                         lerp(Library.BackgroundColor.b, Library.MainColor.b, element.HoverAlpha), 1)
+
                                     render.add_rect_filled(d_pos, d_pos:add(d_size), apply_alpha(bg, op), 6)
                                     render.add_rect(d_pos, d_pos:add(d_size), apply_alpha(Library.OutlineColor, op), 6, 1)
+
+                                    -- Display current value
                                     local display_text
                                     if element.Multi then
                                         local sel={}
                                         for k,v in pairs(element.Value) do if v then table.insert(sel,k) end end
                                         display_text = #sel>0 and table.concat(sel,", ") or "None"
                                     else
-                                        display_text = tostring(element.Value)
+                                        display_text = tostring(element.Value or "")
                                     end
-                                    render.add_text(d_pos:add(vector2(8,3)), get_clipped_text(display_text, d_size.x-24), apply_alpha(Library.FontColor,op))
-                                    render.add_triangle_filled(d_pos:add(vector2(d_size.x-13,8)), d_pos:add(vector2(d_size.x-5,8)), d_pos:add(vector2(d_size.x-9,15)), apply_alpha(Library.FontColor,op))
+                                    render.add_text(d_pos:add(vector2(8,3)),
+                                        get_clipped_text(display_text, d_size.x-24),
+                                        apply_alpha(Library.FontColor, op))
+
+                                    -- Arrow icon
+                                    render.add_triangle_filled(
+                                        d_pos:add(vector2(d_size.x-13, 8)),
+                                        d_pos:add(vector2(d_size.x-5,  8)),
+                                        d_pos:add(vector2(d_size.x-9, 15)),
+                                        apply_alpha(Library.FontColor, op))
+
+                                    -- Toggle open/close on click
                                     if not Library.DraggingWindow and mpressed and is_mouse_in_rect(d_pos, d_size) and can_interact then
-                                        element.Open=not element.Open
+                                        element.Open = not element.Open
                                         Library.OpenedDropdown = element.Open and element or nil
                                     end
 
@@ -1324,11 +1483,7 @@ hook.add("render", "auth_photon_render", function()
                                     render.add_rect(box_pos, box_pos:add(box_size), apply_alpha(Library.OutlineColor,op), 4, 1)
                                     if not Library.DraggingWindow and mpressed and is_mouse_in_rect(box_pos, box_size) and can_interact then
                                         element.Open = not element.Open
-                                        if element.Open then
-                                            Library.ActiveColorPicker = {obj=element, layout=element.layout}
-                                        else
-                                            Library.ActiveColorPicker = nil
-                                        end
+                                        Library.ActiveColorPicker = element.Open and {obj=element, layout=element.layout} or nil
                                     end
 
                                 -- ── Divider ──
@@ -1343,33 +1498,31 @@ hook.add("render", "auth_photon_render", function()
                             end -- not is_clipped
 
                             element_y = element_y + element.Height
-                        end
+                        end -- elements loop
 
-                        -- Overdraw masking for groupbox clip region
+                        -- Overdraw mask for groupboxes with MaxHeight capping ONLY
                         if gb_needs_scroll then
-                            -- Mask above header area
                             apply_clip_mask(
                                 group_pos:add(vector2(0, 28)),
-                                vector2(group_size.x, group_visible_h - 28),
+                                vector2(gb_size.x, gb_visible_h - 28),
                                 Library.MainColor, op)
-                            -- Re-draw the groupbox border on top so it doesn't get masked
-                            render.add_rect(group_pos, group_pos:add(group_size), apply_alpha(Library.OutlineColor, op), 8, 1)
+                            -- Redraw border + title on top of mask
+                            render.add_rect(group_pos, group_pos:add(gb_size), apply_alpha(Library.OutlineColor, op), 8, 1)
                             render.add_text(group_pos:add(vector2(10,8)), groupbox.Name, apply_alpha(Library.FontColor, op))
                         end
 
-                        local used_h = groupbox.MaxHeight and math.min(raw_content_h, groupbox.MaxHeight) or raw_content_h
+                        local used_h = groupbox.MaxHeight and math.min(raw_h, groupbox.MaxHeight) or raw_h
                         if groupbox.Side=="Left" then  left_y  = left_y  + used_h + 12
                         else                           right_y = right_y + used_h + 12 end
                     end
-                end
+                end -- groupboxes loop
 
-                -- Overdraw masking for the tab container clip region
+                -- Tab-level overdraw mask: only when content actually overflows the window
                 if tab_needs_scroll then
                     apply_clip_mask(
                         tab_container_pos:add(vector2(0, 4)),
                         vector2(tab_container_size.x, tab_container_size.y - 4),
                         Library.BackgroundColor, wa)
-                    -- Re-draw window bottom edge so it looks clean
                     render.add_rect(window.Pos, window.Pos:add(window.Size), apply_alpha(Library.OutlineColor, wa), 10, 1)
                 end
             end
@@ -1378,83 +1531,10 @@ hook.add("render", "auth_photon_render", function()
     end
 
     -- ─────────────────────────────────────────
-    --  Dropdown list (drawn above everything, with scrollbar)
+    --  Dropdown list  (drawn after all windows so it's always on top)
     -- ─────────────────────────────────────────
     if Library.OpenedDropdown then
-        local e = Library.OpenedDropdown
-        -- Lazy ID
-        if not e._list_scroll_id then
-            e._list_scroll_id = "dd_" .. tostring(e)
-        end
-
-        local max_visible = e.MaxVisible or 6
-        local total_items = #e.Values
-        local visible_items = math.min(total_items, max_visible)
-        local item_h = 22
-        local needs_list_scroll = total_items > max_visible
-
-        local list_pos  = e.Layout.pos:add(vector2(0, e.Layout.size.y+2))
-        local list_h    = visible_items * item_h + 4
-        local list_size = vector2(e.Layout.size.x, list_h)
-        e.Layout.list_pos  = list_pos
-        e.Layout.list_size = list_size
-
-        local dd_scroll = get_scroll_state(e._list_scroll_id)
-        local content_h_dd = total_items * item_h + 4
-        clamp_scroll(dd_scroll, content_h_dd, list_h)
-
-        if needs_list_scroll then
-            dd_scroll._track_h   = list_h - 8
-            dd_scroll._content_h = content_h_dd
-            dd_scroll._visible_h = list_h
-        end
-
-        draw_shadow(list_pos, list_size, 6, 1)
-        render.add_rect_filled(list_pos, list_pos:add(list_size), Library.MainColor, 6)
-        render.add_rect(list_pos, list_pos:add(list_size), Library.OutlineColor, 6, 1)
-
-        -- Scrollbar for the dropdown list
-        if needs_list_scroll then
-            local sb_pos = list_pos:add(vector2(list_size.x - SB_WIDTH - 2, 4))
-            draw_scrollbar(sb_pos, list_h - 8, content_h_dd, list_h,
-                dd_scroll, 1, mpressed, mdown, mp)
-        end
-
-        local item_y = 2 - dd_scroll.offset
-        local text_max_w = list_size.x - (needs_list_scroll and (SB_WIDTH + SB_PAD + 8) or 8) - 8
-
-        for _, value in ipairs(e.Values) do
-            local ip  = list_pos:add(vector2(1, item_y))
-            local isz = vector2(list_size.x - (needs_list_scroll and (SB_WIDTH + SB_PAD + 4) or 2), item_h)
-
-            -- Only render items within the visible list area
-            local visible_top = list_pos.y + 2
-            local visible_bot = list_pos.y + list_h - 2
-            if ip.y + item_h >= visible_top and ip.y <= visible_bot then
-                local is_sel = (e.Multi and e.Value[value]) or (e.Value==value)
-                local tc = is_sel and Library.AccentColor or Library.FontColor
-                if is_mouse_in_rect(ip, isz) and ip.y >= list_pos.y and ip.y + item_h <= list_pos.y + list_h then
-                    render.add_rect_filled(ip, ip:add(isz), apply_alpha(Library.AccentColor, 0.18), 4)
-                    tc = Library.AccentColor
-                    if mpressed then
-                        if e.Multi then e.Value[value]=not e.Value[value]; e:SetValue(e.Value)
-                        else e:SetValue(value); e.Open=false; Library.OpenedDropdown=nil end
-                    end
-                end
-                render.add_text(ip:add(vector2(8,3)), get_clipped_text(tostring(value), text_max_w), tc)
-            end
-
-            item_y = item_y + item_h
-        end
-
-        -- Mask overflow above/below the list box
-        if needs_list_scroll then
-            apply_clip_mask(
-                list_pos:add(vector2(0, 2)),
-                vector2(list_size.x, list_h - 4),
-                Library.MainColor, 1)
-            render.add_rect(list_pos, list_pos:add(list_size), Library.OutlineColor, 6, 1)
-        end
+        draw_dropdown_list(Library.OpenedDropdown, mpressed, mdown, mp)
     end
 
     -- ─────────────────────────────────────────
@@ -1531,7 +1611,7 @@ hook.add("render", "auth_photon_render", function()
     end
 
     -- ─────────────────────────────────────────
-    --  Right-click menu
+    --  Right-click menu (KeyPicker mode selector)
     -- ─────────────────────────────────────────
     if Library.RightClickMenu then
         local rcm     = Library.RightClickMenu
