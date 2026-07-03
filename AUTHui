@@ -1765,7 +1765,7 @@ hook.add("init", "auth_key_handler_init", function()
     end)
 end)
 
-Library.Options.menu_key = Library.Options.menu_key or { Value = "Insert", Mode = "Toggle" }
+Library.Options.menu_key = Library.Options.menu_key or { Value = "Ins", Mode = "Toggle" }
 
 _G.Library = Library
 return Library
