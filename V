@@ -1,61 +1,143 @@
 --[[
-    ====================================================================
-    NovaUI — custom-rendered Lua UI library for Photon
-    Black background / #9bbcff accent, sidebar-tab layout, glass panels
-    ====================================================================
+    ========================================================================
+    Light — animated custom-rendered UI library for Photon
+    Black background / #9bbcff accent
+    ========================================================================
 
-    This is a from-scratch library (not AUTHui) built entirely on the
-    `render` / `input` / `hook` API surface. Layout philosophy:
+    Goals of this build, vs. earlier NovaUI:
+      • Real easing (not just exponential lerp) via an `Ease` module
+      • Ripple-on-click feedback for buttons/toggles
+      • Springy open/close animation for the whole window
+      • Tab-switch content fades + slides rather than an instant swap
+      • Full HSV color picker panel (saturation/value square + hue strip)
+      • Text input boxes with a blinking caret
+      • Multi-select checklist dropdowns
+      • Toast notification stack with slide-in/out
+      • Tooltips with fade
+      • Config save/load via file.write/file.read (JSON-ish, matches the
+        pattern used elsewhere in this project)
 
-      Window
-        └─ Sidebar (fixed-width, left edge)  — icon + label per tab,
-           animated sliding highlight, hover glow
-        └─ Content area (right of sidebar)   — single active tab's
-           sections stack vertically, each section is a "glass" card
-
-    "Glass" panels are faked the same way AUTHui's shadows are faked:
-    layered semi-transparent rects at slightly offset sizes, since the
-    render API has no native blur.
-
-    Everything lives under the `Nova` table returned at the bottom.
+    Structure of this file:
+      1.  Easing module
+      2.  Theme
+      3.  Small math/color/rect helpers
+      4.  Key name table (for keybind display)
+      5.  Element constructors (toggle, slider, button, dropdown,
+          multiselect, input, keybind, colorpicker, label, divider,
+          progress)
+      6.  Section / Tab / Window object model
+      7.  Notification + tooltip subsystems
+      8.  Config save/load
+      9.  The single render hook that draws + handles input for
+          everything above
+      10. Public `Light` table returned at the bottom
 ]]
 
-local Nova = {
-    Theme = {
-        Background = color(0.02, 0.02, 0.03, 1),  -- window fill, very transparent
-        Sidebar    = color(0.02, 0.02, 0.03, 0.35),  -- sidebar fill, near see-through
-        Card       = color(0.04, 0.04, 0.05, 0.45),  -- section/card fill
-        CardGlass  = color(1, 1, 1, 0.03),           -- glass overlay layer
-        Border     = color(1, 1, 1, 0.05),
-        Text       = color():hex(0xE7E9EE),
-        TextDim    = color():hex(0x7C818C),
-        Accent     = color():hex(0x9BBCFF),
-        AccentDim  = color(0.608, 0.737, 1.0, 0.14),
-        Danger     = color(1, 0.35, 0.4, 1),
-
-        SidebarWidth  = 60,
-        Rounding      = 10,
-        TabHeight     = 48,
-        AnimSpeed     = 10, -- higher = snappier lerp
-    },
-
-    Windows = {},
-    ActiveDrag = nil,      -- window being dragged
-    ActiveSlider = nil,    -- {obj, section, track_pos, track_size}
-    ActiveDropdown = nil,  -- element currently showing its list
-    MouseWasDown = false,
-}
-
 -- ========================================================================
--- helpers
+-- 1. EASING MODULE
 -- ========================================================================
+-- Small collection of standard easing curves, all operating on t in [0,1].
+-- Used anywhere we want motion to feel less linear than a raw lerp.
 
+local Ease = {}
+
+function Ease.linear(t) return t end
+
+function Ease.out_quad(t) return 1 - (1 - t) * (1 - t) end
+
+function Ease.in_quad(t) return t * t end
+
+function Ease.out_cubic(t) local f = 1 - t; return 1 - f * f * f end
+
+function Ease.in_out_cubic(t)
+    if t < 0.5 then return 4 * t * t * t end
+    local f = -2 * t + 2
+    return 1 - (f * f * f) / 2
+end
+
+function Ease.out_back(t)
+    local c1 = 1.70158
+    local c3 = c1 + 1
+    local f = t - 1
+    return 1 + c3 * f * f * f + c1 * f * f
+end
+
+function Ease.out_elastic(t)
+    if t == 0 then return 0 end
+    if t == 1 then return 1 end
+    local c4 = (2 * math.pi) / 3
+    return 2 ^ (-10 * t) * math.sin((t * 10 - 0.75) * c4) + 1
+end
+
+-- Exponential "approach" — frame-rate independent, used for continuous
+-- follow-the-mouse style animations (sliders, hover glow) rather than
+-- fixed-duration tweens.
 local function approach(current, target, speed, dt)
     return current + (target - current) * math.min(speed * dt, 1)
 end
 
+-- Fixed-duration tween helper: given a table with `t` (0..1) and a speed,
+-- advances `t` by dt*speed and returns the eased value via `curve`.
+local function tween_step(state, dt, speed, curve)
+    state.t = math.min(1, state.t + dt * speed)
+    return (curve or Ease.out_cubic)(state.t)
+end
+
+-- ========================================================================
+-- 2. THEME
+-- ========================================================================
+
+local Theme = {
+    Background   = color(0.03, 0.03, 0.035, 0.75),
+    Sidebar      = color(0.02, 0.02, 0.025, 0.55),
+    Card         = color(0.05, 0.05, 0.06, 0.55),
+    CardGlass    = color(1, 1, 1, 0.035),
+    Border       = color(1, 1, 1, 0.06),
+    BorderBright = color(1, 1, 1, 0.14),
+
+    Text     = color():hex(0xE7E9EE),
+    TextDim  = color():hex(0x82868F),
+    TextFaint= color(1, 1, 1, 0.35),
+
+    Accent    = color():hex(0x9BBCFF),
+    AccentDim = color(0.608, 0.737, 1.0, 0.16),
+    AccentSoft= color(0.608, 0.737, 1.0, 0.06),
+
+    Danger  = color(1, 0.38, 0.42, 1),
+    Success = color(0.45, 0.9, 0.55, 1),
+    Warning = color(1, 0.76, 0.35, 1),
+
+    SidebarWidth = 64,
+    Rounding     = 12,
+    CardRounding = 9,
+    TabHeight    = 50,
+    HeaderHeight = 42,
+
+    -- animation tuning
+    HoverSpeed    = 12,
+    ToggleSpeed   = 11,
+    SliderSpeed   = 16,
+    TabTweenSpeed = 3.2,
+    WindowOpenSpeed = 4.2,
+    RippleSpeed   = 2.6,
+    PulseSpeed    = 1.4,
+}
+
+-- ========================================================================
+-- 3. HELPERS
+-- ========================================================================
+
 local function apply_alpha(c, mult)
     return color(c.r, c.g, c.b, (c.a or 1) * mult)
+end
+
+local function mix_color(a, b, t)
+    return color(
+        a.r + (b.r - a.r) * t,
+        a.g + (b.g - a.g) * t,
+        a.b + (b.b - a.b) * t,
+        (a.a or 1) + ((b.a or 1) - (a.a or 1)) * t
+    )
 end
 
 local function point_in_rect(point, pos, size)
@@ -63,127 +145,181 @@ local function point_in_rect(point, pos, size)
        and point.y >= pos.y and point.y <= pos.y + size.y
 end
 
--- Fakes a soft drop shadow with a handful of expanding, fading rects.
+local function clamp01(v) return math.clamp(v, 0, 1) end
+
+-- Layered, fading rects to fake a soft drop shadow (no native blur).
 local function draw_shadow(pos, size, rounding, alpha_mult)
-    for i = 1, 6 do
-        local spread = i * 2
-        local a = (1 - i / 6) * 0.14 * alpha_mult
-        local sp = pos:subtract(vector2(spread, spread * 0.6))
+    for i = 1, 7 do
+        local spread = i * 2.2
+        local a = (1 - i / 7) * 0.16 * alpha_mult
+        local sp = pos:subtract(vector2(spread, spread * 0.55))
         local ss = size:add(vector2(spread * 2, spread * 2))
         render.add_rect_filled(sp, sp:add(ss), color(0, 0, 0, a), rounding + spread)
     end
 end
 
--- Fakes a subtle "glass" texture: a base fill plus a soft top highlight band.
+-- Base fill + soft top highlight band, to fake a glass material.
 local function draw_glass(pos, size, base_color, rounding, alpha_mult)
     render.add_rect_filled(pos, pos:add(size), apply_alpha(base_color, alpha_mult), rounding)
-    local highlight_h = math.min(size.y * 0.4, 40)
-    render.add_rect_filled(
-        pos, pos:add(vector2(size.x, highlight_h)),
-        apply_alpha(Nova.Theme.CardGlass, alpha_mult), rounding
-    )
-    render.add_rect(pos, pos:add(size), apply_alpha(Nova.Theme.Border, alpha_mult), rounding, 1)
+    local highlight_h = math.min(size.y * 0.35, 34)
+    render.add_rect_filled(pos, pos:add(vector2(size.x, highlight_h)), apply_alpha(Theme.CardGlass, alpha_mult), rounding)
+    render.add_rect(pos, pos:add(size), apply_alpha(Theme.Border, alpha_mult), rounding, 1)
+end
+
+-- Expanding, fading ring used as click feedback ("ripple").
+local function draw_ripple(center, progress, max_radius, ripple_color)
+    local eased = Ease.out_quad(progress)
+    local radius = max_radius * eased
+    local alpha = (1 - eased) * 0.35
+    render.add_circle(center, radius, apply_alpha(ripple_color, alpha), 2)
+end
+
+-- Slow breathing glow used behind the active sidebar icon / accent bits.
+local function pulse_alpha(time, speed, min_a, max_a)
+    return min_a + (max_a - min_a) * (0.5 + 0.5 * math.sin(time * speed))
 end
 
 -- ========================================================================
--- element constructors
--- these just build plain data tables; all interactivity happens in the
--- single shared render hook below, keeping per-element code tiny.
+-- 4. KEY NAMES (for keybind display; abbreviated but covers the common set)
 -- ========================================================================
 
-local function new_toggle(text, default, callback)
+local KEY_NAMES = {
+    [0x01] = "LMB", [0x02] = "RMB", [0x04] = "MMB", [0x05] = "MB4", [0x06] = "MB5",
+    [0x08] = "Backspace", [0x09] = "Tab", [0x0D] = "Enter", [0x10] = "Shift",
+    [0x11] = "Ctrl", [0x12] = "Alt", [0x1B] = "Esc", [0x20] = "Space",
+    [0x2D] = "Insert", [0x2E] = "Delete", [0x25] = "Left", [0x26] = "Up",
+    [0x27] = "Right", [0x28] = "Down",
+}
+for i = 0x30, 0x39 do KEY_NAMES[i] = string.char(i) end -- 0-9
+for i = 0x41, 0x5A do KEY_NAMES[i] = string.char(i) end -- A-Z
+for i = 0x70, 0x7B do KEY_NAMES[i] = "F" .. (i - 0x6F) end -- F1-F12
+
+local NAME_TO_KEY = {}
+for vk, name in pairs(KEY_NAMES) do NAME_TO_KEY[name] = vk end
+
+local CHAR_MAP = {}
+for i = 0x30, 0x39 do CHAR_MAP[i] = string.char(i) end
+for i = 0x41, 0x5A do CHAR_MAP[i] = string.char(i + 32) end
+CHAR_MAP[0x20] = " "
+
+-- ========================================================================
+-- 5. ELEMENT CONSTRUCTORS
+-- ========================================================================
+-- Every element is a plain data table with a `kind` tag; the render hook
+-- (section 9) is the only place that draws them or mutates state.
+
+local function new_toggle(text, default, callback, tooltip)
     return {
-        kind = "toggle", text = text, value = default or false,
-        callback = callback, anim = default and 1 or 0, height = 30,
+        kind = "toggle", text = text, value = default or false, callback = callback,
+        tooltip = tooltip, anim = default and 1 or 0, ripple = nil, height = 32,
     }
 end
 
-local function new_slider(text, min, max, default, suffix, callback)
+local function new_slider(text, min, max, default, suffix, callback, tooltip)
     return {
-        kind = "slider", text = text, min = min, max = max,
-        value = default or min, suffix = suffix or "", callback = callback,
-        anim = (default - min) / (max - min), height = 46,
+        kind = "slider", text = text, min = min, max = max, value = default or min,
+        suffix = suffix or "", callback = callback, tooltip = tooltip,
+        anim = (default - min) / (max - min), height = 48, bubble = 0,
     }
 end
 
-local function new_button(text, func)
-    return { kind = "button", text = text, func = func, hover_anim = 0, height = 30 }
-end
-
-local function new_dropdown(text, options, default_index, callback)
+local function new_button(text, func, tooltip)
     return {
-        kind = "dropdown", text = text, options = options,
-        index = default_index or 1, open = false, callback = callback, height = 46,
+        kind = "button", text = text, func = func, tooltip = tooltip,
+        hover_anim = 0, ripple = nil, height = 32,
     }
 end
 
-local function new_keybind(text, default_name, callback)
+local function new_dropdown(text, options, default_index, callback, tooltip)
     return {
-        kind = "keybind", text = text, value = default_name or "...",
-        picking = false, callback = callback, height = 40,
+        kind = "dropdown", text = text, options = options, index = default_index or 1,
+        open = false, callback = callback, tooltip = tooltip, height = 48, hover_anim = 0,
+    }
+end
+
+local function new_multiselect(text, options, defaults, callback, tooltip)
+    local selected = {}
+    for _, i in ipairs(defaults or {}) do selected[i] = true end
+    return {
+        kind = "multiselect", text = text, options = options, selected = selected,
+        open = false, callback = callback, tooltip = tooltip, height = 48, hover_anim = 0,
+    }
+end
+
+local function new_input(text, placeholder, default, callback, tooltip)
+    return {
+        kind = "input", text = text, placeholder = placeholder or "", value = default or "",
+        active = false, callback = callback, tooltip = tooltip, height = 48,
+    }
+end
+
+local function new_keybind(text, default_name, mode, callback, tooltip)
+    return {
+        kind = "keybind", text = text, value = default_name or "...", mode = mode or "Hold",
+        picking = false, active = false, callback = callback, tooltip = tooltip, height = 42,
+    }
+end
+
+local function new_colorpicker(text, default, callback, tooltip)
+    local c = default or color(1, 1, 1, 1)
+    return {
+        kind = "colorpicker", text = text, value = c, open = false, callback = callback,
+        tooltip = tooltip, height = 30,
     }
 end
 
 local function new_label(text)
-    return { kind = "label", text = text, height = 24 }
+    return { kind = "label", text = text, height = 22 }
 end
 
 local function new_divider()
-    return { kind = "divider", height = 14 }
+    return { kind = "divider", height = 16 }
+end
+
+local function new_progress(text, value, max_value)
+    return { kind = "progress", text = text, value = value or 0, max = max_value or 100, height = 40, anim = 0 }
 end
 
 -- ========================================================================
--- section (card) — owns a list of elements
+-- 6. SECTION / TAB / WINDOW OBJECT MODEL
 -- ========================================================================
 
 local SectionMethods = {}
 SectionMethods.__index = SectionMethods
 
-function SectionMethods:AddToggle(text, default, callback)
-    local el = new_toggle(text, default, callback)
-    table.insert(self.elements, el)
-    return el
+function SectionMethods:AddToggle(text, default, callback, tooltip)
+    local el = new_toggle(text, default, callback, tooltip); table.insert(self.elements, el); return el
 end
-
-function SectionMethods:AddSlider(text, min, max, default, suffix, callback)
-    local el = new_slider(text, min, max, default, suffix, callback)
-    table.insert(self.elements, el)
-    return el
+function SectionMethods:AddSlider(text, min, max, default, suffix, callback, tooltip)
+    local el = new_slider(text, min, max, default, suffix, callback, tooltip); table.insert(self.elements, el); return el
 end
-
-function SectionMethods:AddButton(text, func)
-    local el = new_button(text, func)
-    table.insert(self.elements, el)
-    return el
+function SectionMethods:AddButton(text, func, tooltip)
+    local el = new_button(text, func, tooltip); table.insert(self.elements, el); return el
 end
-
-function SectionMethods:AddDropdown(text, options, default_index, callback)
-    local el = new_dropdown(text, options, default_index, callback)
-    table.insert(self.elements, el)
-    return el
+function SectionMethods:AddDropdown(text, options, default_index, callback, tooltip)
+    local el = new_dropdown(text, options, default_index, callback, tooltip); table.insert(self.elements, el); return el
 end
-
-function SectionMethods:AddKeybind(text, default_name, callback)
-    local el = new_keybind(text, default_name, callback)
-    table.insert(self.elements, el)
-    return el
+function SectionMethods:AddMultiselect(text, options, defaults, callback, tooltip)
+    local el = new_multiselect(text, options, defaults, callback, tooltip); table.insert(self.elements, el); return el
 end
-
+function SectionMethods:AddInput(text, placeholder, default, callback, tooltip)
+    local el = new_input(text, placeholder, default, callback, tooltip); table.insert(self.elements, el); return el
+end
+function SectionMethods:AddKeybind(text, default_name, mode, callback, tooltip)
+    local el = new_keybind(text, default_name, mode, callback, tooltip); table.insert(self.elements, el); return el
+end
+function SectionMethods:AddColorPicker(text, default, callback, tooltip)
+    local el = new_colorpicker(text, default, callback, tooltip); table.insert(self.elements, el); return el
+end
 function SectionMethods:AddLabel(text)
-    local el = new_label(text)
-    table.insert(self.elements, el)
-    return el
+    local el = new_label(text); table.insert(self.elements, el); return el
 end
-
 function SectionMethods:AddDivider()
-    local el = new_divider()
-    table.insert(self.elements, el)
-    return el
+    local el = new_divider(); table.insert(self.elements, el); return el
 end
-
--- ========================================================================
--- tab — owns a list of sections, lives in the sidebar
--- ========================================================================
+function SectionMethods:AddProgress(text, value, max_value)
+    local el = new_progress(text, value, max_value); table.insert(self.elements, el); return el
+end
 
 local TabMethods = {}
 TabMethods.__index = TabMethods
@@ -193,10 +329,6 @@ function TabMethods:AddSection(name)
     table.insert(self.sections, section)
     return section
 end
-
--- ========================================================================
--- window
--- ========================================================================
 
 local WindowMethods = {}
 WindowMethods.__index = WindowMethods
@@ -208,181 +340,364 @@ function WindowMethods:AddTab(name, icon)
     return tab
 end
 
-function Nova.CreateWindow(config)
+function WindowMethods:Open()
+    self.visible = true
+    self.open_anim.t = 0
+end
+
+function WindowMethods:Close()
+    self.closing = true
+end
+
+function WindowMethods:Toggle()
+    if self.visible and not self.closing then self:Close() else self:Open() end
+end
+
+-- ========================================================================
+-- 7. LIGHT ROOT TABLE + NOTIFICATIONS / TOOLTIP STATE
+-- ========================================================================
+
+local Light = {
+    Ease = Ease,
+    Theme = Theme,
+    Windows = {},
+    Notifications = {},
+
+    -- shared interaction state (only one thing can be "active" at a time
+    -- across all windows, which keeps click-handling simple)
+    ActiveDrag = nil,
+    ActiveSlider = nil,
+    ActiveDropdown = nil,
+    ActiveColorPicker = nil,
+    ActiveInput = nil,
+    MouseWasDown = false,
+    Time = 0,
+
+    ConfigFolder = "light_configs/",
+}
+
+function Light:Notify(text, kind, duration)
+    table.insert(self.Notifications, {
+        text = text, kind = kind or "info", duration = duration or 3.5,
+        elapsed = 0, alpha = 0, offset = 24,
+    })
+end
+
+function Light.CreateWindow(config)
     local screen = get_screen_size()
-    local size = config.size or vector2(620, 440)
+    local size = config.size or vector2(660, 470)
     local pos = config.pos or vector2((screen.x - size.x) / 2, (screen.y - size.y) / 2)
 
     local window = setmetatable({
-        title = config.title or "Nova",
+        title = config.title or "Light",
         pos = pos,
         size = size,
         visible = config.visible ~= false,
+        closing = false,
         tabs = {},
         active_tab = nil,
-        highlight_y = 0,   -- animated sidebar highlight position
+        prev_tab = nil,
+        highlight_y = 0,
+        open_anim = { t = 1 },
+        tab_anim = { t = 1 },
     }, WindowMethods)
 
-    table.insert(Nova.Windows, window)
+    table.insert(Light.Windows, window)
     return window
 end
 
 -- ========================================================================
--- render hook — draws every window and handles all input in one pass
+-- 8. CONFIG SAVE / LOAD
+-- ========================================================================
+-- Lightweight JSON-ish serializer, matching the pattern used by AUTHui so
+-- configs are structurally similar if you ever need to migrate between them.
+
+local function serialize(val)
+    local t = type(val)
+    if t == "string" then
+        return '"' .. val:gsub('"', '\\"') .. '"'
+    elseif t == "number" or t == "boolean" then
+        return tostring(val)
+    elseif t == "table" then
+        local is_array, max_idx = true, 0
+        for k in pairs(val) do
+            if type(k) ~= "number" or k ~= math.floor(k) or k <= 0 then is_array = false; break end
+            if k > max_idx then max_idx = k end
+        end
+        local items = {}
+        if is_array and max_idx > 0 then
+            for i = 1, max_idx do table.insert(items, serialize(val[i])) end
+            return "[" .. table.concat(items, ",") .. "]"
+        else
+            for k, v in pairs(val) do table.insert(items, serialize(tostring(k)) .. ":" .. serialize(v)) end
+            return "{" .. table.concat(items, ",") .. "}"
+        end
+    end
+    return "null"
+end
+
+local function deserialize(str)
+    local func = load("return " .. str, "light_config")
+    if not func then return nil end
+    local ok, result = pcall(func)
+    if not ok then return nil end
+    return result
+end
+
+function Light:SaveConfig(window, name)
+    if not file.exists(self.ConfigFolder) then file.write(self.ConfigFolder .. ".keep", "") end
+    local snapshot = { toggles = {}, sliders = {}, dropdowns = {}, inputs = {} }
+
+    for _, tab in ipairs(window.tabs) do
+        for _, section in ipairs(tab.sections) do
+            for _, el in ipairs(section.elements) do
+                if el.kind == "toggle" then snapshot.toggles[el.text] = el.value
+                elseif el.kind == "slider" then snapshot.sliders[el.text] = el.value
+                elseif el.kind == "dropdown" then snapshot.dropdowns[el.text] = el.index
+                elseif el.kind == "input" then snapshot.inputs[el.text] = el.value end
+            end
+        end
+    end
+
+    file.write(self.ConfigFolder .. name .. ".json", serialize(snapshot))
+    self:Notify("Config saved: " .. name, "success")
+end
+
+function Light:LoadConfig(window, name)
+    local path = self.ConfigFolder .. name .. ".json"
+    if not file.exists(path) then self:Notify("Config not found: " .. name, "warning"); return end
+    local data = deserialize(file.read(path))
+    if not data then self:Notify("Failed to parse config: " .. name, "warning"); return end
+
+    for _, tab in ipairs(window.tabs) do
+        for _, section in ipairs(tab.sections) do
+            for _, el in ipairs(section.elements) do
+                if el.kind == "toggle" and data.toggles[el.text] ~= nil then
+                    el.value = data.toggles[el.text]
+                    if el.callback then el.callback(el.value) end
+                elseif el.kind == "slider" and data.sliders[el.text] then
+                    el.value = data.sliders[el.text]
+                    el.anim = (el.value - el.min) / (el.max - el.min)
+                    if el.callback then el.callback(el.value) end
+                elseif el.kind == "dropdown" and data.dropdowns[el.text] then
+                    el.index = data.dropdowns[el.text]
+                    if el.callback then el.callback(el.index, el.options[el.index]) end
+                elseif el.kind == "input" and data.inputs[el.text] then
+                    el.value = data.inputs[el.text]
+                    if el.callback then el.callback(el.value) end
+                end
+            end
+        end
+    end
+    self:Notify("Config loaded: " .. name, "success")
+end
+
+-- ========================================================================
+-- 9. MAIN RENDER HOOK
 -- ========================================================================
 
-hook.add("render", "novaui_render", function()
+hook.add("render", "light_ui_render", function()
     local dt = render.deltatime()
-    local theme = Nova.Theme
+    Light.Time = Light.Time + dt
+    local time = Light.Time
     local mouse = input.get_mouse_position()
     local mouse_down = input.key_down(0x01)
-    local mouse_clicked = mouse_down and not Nova.MouseWasDown
-    Nova.MouseWasDown = mouse_down
+    local mouse_clicked = mouse_down and not Light.MouseWasDown
+    Light.MouseWasDown = mouse_down
 
-    -- window drag release
-    if Nova.ActiveDrag and not mouse_down then
-        Nova.ActiveDrag = nil
-    end
+    if Light.ActiveDrag and not mouse_down then Light.ActiveDrag = nil end
+    if Light.ActiveSlider and not mouse_down then Light.ActiveSlider = nil end
 
-    -- slider drag release
-    if Nova.ActiveSlider and not mouse_down then
-        Nova.ActiveSlider = nil
-    end
+    -- ==================== windows ====================
+    for wi, window in ipairs(Light.Windows) do
+        -- open/close spring animation
+        if window.closing then
+            window.open_anim.t = math.max(0, window.open_anim.t - dt * Theme.WindowOpenSpeed)
+            if window.open_anim.t <= 0 then window.visible = false; window.closing = false end
+        elseif window.visible then
+            window.open_anim.t = math.min(1, window.open_anim.t + dt * Theme.WindowOpenSpeed)
+        end
 
-    for _, window in ipairs(Nova.Windows) do
         if window.visible then
-            local pos, size = window.pos, window.size
+            local open_e = Ease.out_back(window.open_anim.t)
+            local open_alpha = clamp01(window.open_anim.t * 1.4)
+            local scale_offset = (1 - open_e) * 14
 
-            -- window drag
-            local title_bar_size = vector2(size.x, 34)
+            local pos = window.pos:add(vector2(0, scale_offset))
+            local size = window.size
+
+            -- ---- drag ----
+            local title_bar_size = vector2(size.x, Theme.HeaderHeight)
             if mouse_clicked and point_in_rect(mouse, pos, title_bar_size)
-               and not Nova.ActiveDrag and not Nova.ActiveDropdown then
-                Nova.ActiveDrag = { window = window, offset = mouse:subtract(pos) }
+               and not Light.ActiveDrag and not Light.ActiveDropdown and not Light.ActiveColorPicker then
+                Light.ActiveDrag = { window = window, offset = mouse:subtract(window.pos) }
             end
-            if Nova.ActiveDrag and Nova.ActiveDrag.window == window then
-                window.pos = mouse:subtract(Nova.ActiveDrag.offset)
-                pos = window.pos
+            if Light.ActiveDrag and Light.ActiveDrag.window == window then
+                window.pos = mouse:subtract(Light.ActiveDrag.offset)
+                pos = window.pos:add(vector2(0, scale_offset))
             end
 
-            -- outer shadow + base panel
-            draw_shadow(pos, size, theme.Rounding, 1)
-            render.add_rect_filled(pos, pos:add(size), theme.Background, theme.Rounding)
-            render.add_rect(pos, pos:add(size), theme.Border, theme.Rounding, 1)
-            render.add_text(pos:add(vector2(theme.SidebarWidth + 16, 10)), window.title, apply_alpha(theme.Text, 0.9), 15)
+            -- ---- base panel ----
+            draw_shadow(pos, size, Theme.Rounding, open_alpha)
+            render.add_rect_filled(pos, pos:add(size), apply_alpha(Theme.Background, open_alpha), Theme.Rounding)
+            render.add_rect(pos, pos:add(size), apply_alpha(Theme.BorderBright, open_alpha), Theme.Rounding, 1)
 
-            -- ── sidebar ──
-            local sidebar_pos = pos
-            local sidebar_size = vector2(theme.SidebarWidth, size.y)
-            render.add_rect_filled(sidebar_pos, sidebar_pos:add(sidebar_size), theme.Sidebar, theme.Rounding)
+            -- header
+            render.add_text(pos:add(vector2(Theme.SidebarWidth + 18, 13)), window.title, apply_alpha(Theme.Text, open_alpha), 16)
+            local glow_a = pulse_alpha(time, Theme.PulseSpeed, 0.35, 0.8) * open_alpha
+            render.add_circle_filled(pos:add(vector2(Theme.SidebarWidth + 4, 21)), 3, apply_alpha(Theme.Accent, glow_a))
             render.add_line(
-                sidebar_pos:add(vector2(theme.SidebarWidth, 8)),
-                sidebar_pos:add(vector2(theme.SidebarWidth, size.y - 8)),
-                theme.Border, 1
+                pos:add(vector2(Theme.SidebarWidth + 14, Theme.HeaderHeight)),
+                pos:add(vector2(size.x - 14, Theme.HeaderHeight)),
+                apply_alpha(Theme.Border, open_alpha), 1
             )
 
-            local list_top = 18
-            local target_highlight_y = list_top + 0
+            -- ---- sidebar ----
+            local sidebar_pos = pos
+            local sidebar_size = vector2(Theme.SidebarWidth, size.y)
+            render.add_rect_filled(sidebar_pos, sidebar_pos:add(sidebar_size), apply_alpha(Theme.Sidebar, open_alpha), Theme.Rounding)
+            render.add_line(
+                sidebar_pos:add(vector2(Theme.SidebarWidth, 10)),
+                sidebar_pos:add(vector2(Theme.SidebarWidth, size.y - 10)),
+                apply_alpha(Theme.Border, open_alpha), 1
+            )
+
+            local list_top = 20
+            local target_highlight_y = list_top
             local hovered_tab = nil
 
             for i, tab in ipairs(window.tabs) do
-                local row_y = list_top + (i - 1) * theme.TabHeight
-                local row_pos = sidebar_pos:add(vector2(8, row_y))
-                local row_size = vector2(theme.SidebarWidth - 16, theme.TabHeight - 6)
+                local row_y = list_top + (i - 1) * Theme.TabHeight
+                local row_pos = sidebar_pos:add(vector2(6, row_y))
+                local row_size = vector2(Theme.SidebarWidth - 12, Theme.TabHeight - 8)
 
                 if point_in_rect(mouse, row_pos, row_size) then
                     hovered_tab = tab
-                    render.add_rect_filled(row_pos, row_pos:add(row_size), color(1, 1, 1, 0.03), theme.Rounding - 3)
-                    if mouse_clicked then window.active_tab = tab end
+                    render.add_rect_filled(row_pos, row_pos:add(row_size), apply_alpha(color(1, 1, 1, 0.035), open_alpha), Theme.CardRounding)
+                    if mouse_clicked and window.active_tab ~= tab then
+                        window.prev_tab = window.active_tab
+                        window.active_tab = tab
+                        window.tab_anim.t = 0
+                    end
                 end
-
-                if window.active_tab == tab then
-                    target_highlight_y = row_y
-                end
+                if window.active_tab == tab then target_highlight_y = row_y end
             end
 
-            window.highlight_y = approach(window.highlight_y, target_highlight_y, theme.AnimSpeed, dt)
+            window.highlight_y = approach(window.highlight_y, target_highlight_y, Theme.HoverSpeed, dt)
 
-            local hl_pos = sidebar_pos:add(vector2(8, window.highlight_y))
-            local hl_size = vector2(theme.SidebarWidth - 16, theme.TabHeight - 6)
-            render.add_rect_filled(hl_pos, hl_pos:add(hl_size), theme.AccentDim, theme.Rounding - 3)
-            render.add_rect_filled(hl_pos, hl_pos:add(vector2(3, hl_size.y)), theme.Accent, 2)
+            local hl_pos = sidebar_pos:add(vector2(6, window.highlight_y))
+            local hl_size = vector2(Theme.SidebarWidth - 12, Theme.TabHeight - 8)
+            render.add_rect_filled(hl_pos, hl_pos:add(hl_size), apply_alpha(Theme.AccentDim, open_alpha), Theme.CardRounding)
+            local pulse = pulse_alpha(time, Theme.PulseSpeed, 0.7, 1)
+            render.add_rect_filled(hl_pos, hl_pos:add(vector2(3, hl_size.y)), apply_alpha(Theme.Accent, open_alpha * pulse), 2)
 
             for i, tab in ipairs(window.tabs) do
-                local row_y = list_top + (i - 1) * theme.TabHeight
+                local row_y = list_top + (i - 1) * Theme.TabHeight
                 local is_active = window.active_tab == tab
-                local text_color = is_active and theme.Accent
-                    or (tab == hovered_tab and theme.Text or theme.TextDim)
+                local text_color = is_active and Theme.Accent or (tab == hovered_tab and Theme.Text or Theme.TextDim)
                 local icon_w = render.get_text_size(tab.icon).x
-                render.add_text(sidebar_pos:add(vector2((theme.SidebarWidth - icon_w) / 2, row_y + 15)), tab.icon, text_color, 15)
+                local icon_scale_y = is_active and 0 or 0 -- reserved for future bounce
+                render.add_text(
+                    sidebar_pos:add(vector2((Theme.SidebarWidth - icon_w) / 2, row_y + (Theme.TabHeight - 8) / 2 - 7)),
+                    tab.icon, apply_alpha(text_color, open_alpha), 16
+                )
             end
 
-            -- ── content area ──
-            local content_pos = pos:add(vector2(theme.SidebarWidth + 14, 40))
-            local content_width = size.x - theme.SidebarWidth - 28
+            -- ---- content area (with tab-switch fade+slide) ----
+            local content_pos = pos:add(vector2(Theme.SidebarWidth + 16, Theme.HeaderHeight + 12))
+            local content_width = size.x - Theme.SidebarWidth - 32
+
+            local tab_e = tween_step(window.tab_anim, dt, Theme.TabTweenSpeed, Ease.out_cubic)
+            local slide_x = (1 - tab_e) * 16
+            local tab_alpha = tab_e * open_alpha
 
             if window.active_tab then
                 local cursor_y = 0
                 for _, section in ipairs(window.active_tab.sections) do
-                    local card_pos = content_pos:add(vector2(0, cursor_y))
+                    local card_pos = content_pos:add(vector2(slide_x, cursor_y))
 
-                    local inner_height = 32
+                    local inner_height = 34
                     for _, el in ipairs(section.elements) do inner_height = inner_height + el.height end
                     local card_size = vector2(content_width, inner_height)
 
-                    draw_glass(card_pos, card_size, theme.Card, theme.Rounding - 2, 1)
-                    render.add_text(card_pos:add(vector2(12, 9)), section.name, theme.Text, 13)
+                    draw_glass(card_pos, card_size, Theme.Card, Theme.CardRounding, tab_alpha)
+                    render.add_text(card_pos:add(vector2(14, 10)), section.name, apply_alpha(Theme.Text, tab_alpha), 13)
+                    render.add_line(
+                        card_pos:add(vector2(14, 30)), card_pos:add(vector2(card_size.x - 14, 30)),
+                        apply_alpha(Theme.Border, tab_alpha), 1
+                    )
 
-                    local element_y = 30
+                    local element_y = 38
                     for _, el in ipairs(section.elements) do
-                        local ep = card_pos:add(vector2(12, element_y))
-                        local ew = card_size.x - 24
+                        local ep = card_pos:add(vector2(14, element_y))
+                        local ew = card_size.x - 28
+                        local hovered_this = point_in_rect(mouse, ep, vector2(ew, el.height - 4))
 
+                        if hovered_this and el.tooltip then
+                            Light.HoverTooltip = el.tooltip
+                        end
+
+                        -- ============ TOGGLE ============
                         if el.kind == "toggle" then
                             local target = el.value and 1 or 0
-                            el.anim = approach(el.anim, target, theme.AnimSpeed, dt)
-                            local sw_pos = ep:add(vector2(0, 4))
-                            local sw_size = vector2(30, 16)
-                            local base = color(0.08, 0.08, 0.10, 1)
-                            local track = color(
-                                base.r + (theme.Accent.r - base.r) * el.anim,
-                                base.g + (theme.Accent.g - base.g) * el.anim,
-                                base.b + (theme.Accent.b - base.b) * el.anim, 1
-                            )
-                            render.add_rect_filled(sw_pos, sw_pos:add(sw_size), track, 8)
-                            render.add_rect(sw_pos, sw_pos:add(sw_size), theme.Border, 8, 1)
-                            local knob_x = sw_pos.x + 2 + (sw_size.x - 12) * el.anim
-                            render.add_circle_filled(vector2(knob_x + 5, sw_pos.y + 8), 5, theme.Text)
-                            render.add_text(ep:add(vector2(38, 2)), el.text, theme.Text, 13)
+                            el.anim = approach(el.anim, target, Theme.ToggleSpeed, dt)
+                            local sw_pos = ep:add(vector2(0, 5))
+                            local sw_size = vector2(32, 17)
+                            local base = color(0.10, 0.10, 0.12, 1)
+                            local track = mix_color(base, Theme.Accent, el.anim)
+                            render.add_rect_filled(sw_pos, sw_pos:add(sw_size), apply_alpha(track, tab_alpha), 9)
+                            render.add_rect(sw_pos, sw_pos:add(sw_size), apply_alpha(Theme.Border, tab_alpha), 9, 1)
+                            local knob_x = sw_pos.x + 2 + (sw_size.x - 13) * el.anim
+                            render.add_circle_filled(vector2(knob_x + 5.5, sw_pos.y + 8.5), 6, apply_alpha(Theme.Text, tab_alpha))
+                            render.add_text(ep:add(vector2(40, 3)), el.text, apply_alpha(Theme.Text, tab_alpha), 13)
 
-                            if mouse_clicked and point_in_rect(mouse, ep, vector2(ew, 22)) then
+                            if el.ripple then
+                                el.ripple.t = el.ripple.t + dt * Theme.RippleSpeed
+                                if el.ripple.t < 1 then
+                                    draw_ripple(vector2(sw_pos.x + sw_size.x / 2, sw_pos.y + sw_size.y / 2), el.ripple.t, 26, Theme.Accent)
+                                else
+                                    el.ripple = nil
+                                end
+                            end
+
+                            if mouse_clicked and hovered_this then
                                 el.value = not el.value
+                                el.ripple = { t = 0 }
                                 if el.callback then el.callback(el.value) end
                             end
 
+                        -- ============ SLIDER ============
                         elseif el.kind == "slider" then
-                            render.add_text(ep, el.text, theme.TextDim, 12)
-                            local track_pos = ep:add(vector2(0, 20))
+                            render.add_text(ep, el.text, apply_alpha(Theme.TextDim, tab_alpha), 12)
+                            local track_pos = ep:add(vector2(0, 22))
                             local track_size = vector2(ew, 6)
-                            local ratio = (el.value - el.min) / (el.max - el.min)
+                            local ratio = clamp01((el.value - el.min) / (el.max - el.min))
 
-                            render.add_rect_filled(track_pos, track_pos:add(track_size), color(1, 1, 1, 0.06), 3)
-                            local fill_w = track_size.x * ratio
-                            if fill_w > 0 then
-                                render.add_rect_filled(track_pos, track_pos:add(vector2(fill_w, track_size.y)), theme.Accent, 3)
+                            render.add_rect_filled(track_pos, track_pos:add(track_size), apply_alpha(color(1, 1, 1, 0.07), tab_alpha), 3)
+                            el.anim = approach(el.anim, ratio, Theme.SliderSpeed, dt)
+                            local fill_w = track_size.x * el.anim
+                            if fill_w > 0.5 then
+                                render.add_rect_filled(track_pos, track_pos:add(vector2(fill_w, track_size.y)), apply_alpha(Theme.Accent, tab_alpha), 3)
                             end
                             local knob_x = track_pos.x + fill_w
-                            render.add_circle_filled(vector2(knob_x, track_pos.y + 3), 6, theme.Text)
+                            local is_dragging = Light.ActiveSlider and Light.ActiveSlider.obj == el
+                            local hover_or_drag = hovered_this or is_dragging
+                            el.bubble = approach(el.bubble, hover_or_drag and 1 or 0, Theme.HoverSpeed, dt)
+                            render.add_circle_filled(vector2(knob_x, track_pos.y + 3), 6.5, apply_alpha(Theme.Text, tab_alpha))
+                            if el.bubble > 0.02 then
+                                render.add_circle(vector2(knob_x, track_pos.y + 3), 6.5 + el.bubble * 4, apply_alpha(Theme.Accent, tab_alpha * el.bubble * 0.5), 1)
+                            end
 
                             local val_text = tostring(math.floor(el.value * 100 + 0.5) / 100) .. el.suffix
-                            render.add_text(track_pos:add(vector2(track_size.x - render.get_text_size(val_text).x, -18)), val_text, theme.TextDim, 12)
+                            render.add_text(track_pos:add(vector2(track_size.x - render.get_text_size(val_text).x, -18)), val_text, apply_alpha(Theme.TextDim, tab_alpha), 12)
 
-                            local hit_pos = track_pos:subtract(vector2(0, 6))
-                            local hit_size = vector2(track_size.x, 18)
-                            if mouse_clicked and point_in_rect(mouse, hit_pos, hit_size) and not Nova.ActiveSlider then
-                                Nova.ActiveSlider = { obj = el, track_pos = track_pos, track_size = track_size }
+                            local hit_pos = track_pos:subtract(vector2(0, 7))
+                            local hit_size = vector2(track_size.x, 20)
+                            if mouse_clicked and point_in_rect(mouse, hit_pos, hit_size) and not Light.ActiveSlider then
+                                Light.ActiveSlider = { obj = el }
                             end
-                            if Nova.ActiveSlider and Nova.ActiveSlider.obj == el then
-                                local r = math.clamp((mouse.x - track_pos.x) / track_size.x, 0, 1)
+                            if Light.ActiveSlider and Light.ActiveSlider.obj == el then
+                                local r = clamp01((mouse.x - track_pos.x) / track_size.x)
                                 local new_val = el.min + (el.max - el.min) * r
                                 if new_val ~= el.value then
                                     el.value = new_val
@@ -390,114 +705,356 @@ hook.add("render", "novaui_render", function()
                                 end
                             end
 
+                        -- ============ BUTTON ============
                         elseif el.kind == "button" then
-                            local is_hover = point_in_rect(mouse, ep, vector2(ew, 26))
-                            el.hover_anim = approach(el.hover_anim, is_hover and 1 or 0, theme.AnimSpeed, dt)
-                            local bg = color(
-                                0.08 + (theme.Accent.r - 0.08) * el.hover_anim * 0.25,
-                                0.08 + (theme.Accent.g - 0.08) * el.hover_anim * 0.25,
-                                0.10 + (theme.Accent.b - 0.10) * el.hover_anim * 0.25, 1
-                            )
-                            render.add_rect_filled(ep, ep:add(vector2(ew, 26)), bg, 6)
-                            render.add_rect(ep, ep:add(vector2(ew, 26)), theme.Border, 6, 1)
+                            local b_size = vector2(ew, 28)
+                            el.hover_anim = approach(el.hover_anim, hovered_this and 1 or 0, Theme.HoverSpeed, dt)
+                            local bg = mix_color(color(0.08, 0.08, 0.10, 1), Theme.AccentSoft, el.hover_anim)
+                            render.add_rect_filled(ep, ep:add(b_size), apply_alpha(bg, tab_alpha), 7)
+                            render.add_rect(ep, ep:add(b_size), apply_alpha(mix_color(Theme.Border, Theme.Accent, el.hover_anim * 0.5), tab_alpha), 7, 1)
                             local tw = render.get_text_size(el.text).x
-                            render.add_text(ep:add(vector2(ew / 2 - tw / 2, 6)), el.text, theme.Text, 13)
+                            render.add_text(ep:add(vector2(b_size.x / 2 - tw / 2, 7)), el.text, apply_alpha(Theme.Text, tab_alpha), 13)
 
-                            if mouse_clicked and is_hover and el.func then el.func() end
+                            if el.ripple then
+                                el.ripple.t = el.ripple.t + dt * Theme.RippleSpeed
+                                if el.ripple.t < 1 then
+                                    draw_ripple(el.ripple.origin, el.ripple.t, ew * 0.6, Theme.Accent)
+                                else
+                                    el.ripple = nil
+                                end
+                            end
 
+                            if mouse_clicked and hovered_this then
+                                el.ripple = { t = 0, origin = mouse }
+                                if el.func then el.func() end
+                            end
+
+                        -- ============ DROPDOWN ============
                         elseif el.kind == "dropdown" then
-                            render.add_text(ep, el.text, theme.TextDim, 12)
-                            local box_pos = ep:add(vector2(0, 18))
+                            render.add_text(ep, el.text, apply_alpha(Theme.TextDim, tab_alpha), 12)
+                            local box_pos = ep:add(vector2(0, 20))
                             local box_size = vector2(ew, 24)
-                            render.add_rect_filled(box_pos, box_pos:add(box_size), color(1, 1, 1, 0.04), 6)
-                            render.add_rect(box_pos, box_pos:add(box_size), theme.Border, 6, 1)
-                            render.add_text(box_pos:add(vector2(8, 4)), el.options[el.index], theme.Text, 13)
+                            el.hover_anim = approach(el.hover_anim, point_in_rect(mouse, box_pos, box_size) and 1 or 0, Theme.HoverSpeed, dt)
+                            render.add_rect_filled(box_pos, box_pos:add(box_size), apply_alpha(mix_color(color(1,1,1,0.04), color(1,1,1,0.07), el.hover_anim), tab_alpha), 6)
+                            render.add_rect(box_pos, box_pos:add(box_size), apply_alpha(Theme.Border, tab_alpha), 6, 1)
+                            render.add_text(box_pos:add(vector2(9, 5)), el.options[el.index], apply_alpha(Theme.Text, tab_alpha), 13)
+                            local arrow_rot = el.open and 1 or 0
+                            render.add_triangle_filled(
+                                box_pos:add(vector2(box_size.x - 16, el.open and 9 or 8)),
+                                box_pos:add(vector2(box_size.x - 8, el.open and 9 or 8)),
+                                box_pos:add(vector2(box_size.x - 12, el.open and 6 or 13)),
+                                apply_alpha(Theme.TextDim, tab_alpha)
+                            )
 
                             if mouse_clicked and point_in_rect(mouse, box_pos, box_size) then
                                 el.open = not el.open
-                                Nova.ActiveDropdown = el.open and el or nil
+                                Light.ActiveDropdown = el.open and el or nil
                             end
-
                             if el.open then
-                                el._list_pos = box_pos:add(vector2(0, box_size.y + 2))
-                                el._list_size = vector2(box_size.x, #el.options * 22 + 4)
+                                el._list_pos = box_pos:add(vector2(0, box_size.y + 4))
+                                el._list_size = vector2(box_size.x, #el.options * 24 + 6)
+                                el._multi = false
                             end
 
-                        elseif el.kind == "keybind" then
-                            render.add_text(ep, el.text, theme.TextDim, 12)
-                            local box_pos = ep:add(vector2(0, 18))
-                            local box_size = vector2(ew, 22)
-                            render.add_rect_filled(box_pos, box_pos:add(box_size), color(1, 1, 1, 0.04), 6)
-                            render.add_rect(box_pos, box_pos:add(box_size),
-                                el.picking and theme.Accent or theme.Border, 6, 1)
-                            local label = el.picking and "press a key..." or el.value
-                            render.add_text(box_pos:add(vector2(box_size.x / 2 - render.get_text_size(label).x / 2, 3)), label, theme.Text, 12)
+                        -- ============ MULTISELECT ============
+                        elseif el.kind == "multiselect" then
+                            render.add_text(ep, el.text, apply_alpha(Theme.TextDim, tab_alpha), 12)
+                            local box_pos = ep:add(vector2(0, 20))
+                            local box_size = vector2(ew, 24)
+                            el.hover_anim = approach(el.hover_anim, point_in_rect(mouse, box_pos, box_size) and 1 or 0, Theme.HoverSpeed, dt)
+                            render.add_rect_filled(box_pos, box_pos:add(box_size), apply_alpha(mix_color(color(1,1,1,0.04), color(1,1,1,0.07), el.hover_anim), tab_alpha), 6)
+                            render.add_rect(box_pos, box_pos:add(box_size), apply_alpha(Theme.Border, tab_alpha), 6, 1)
+                            local names = {}
+                            for i, opt in ipairs(el.options) do if el.selected[i] then table.insert(names, opt) end end
+                            local label = #names > 0 and table.concat(names, ", ") or "None selected"
+                            render.add_text(box_pos:add(vector2(9, 5)), label, apply_alpha(Theme.Text, tab_alpha), 13)
 
                             if mouse_clicked and point_in_rect(mouse, box_pos, box_size) then
-                                el.picking = true
+                                el.open = not el.open
+                                Light.ActiveDropdown = el.open and el or nil
+                            end
+                            if el.open then
+                                el._list_pos = box_pos:add(vector2(0, box_size.y + 4))
+                                el._list_size = vector2(box_size.x, #el.options * 24 + 6)
+                                el._multi = true
                             end
 
-                        elseif el.kind == "label" then
-                            render.add_text(ep, el.text, theme.Text, 13)
+                        -- ============ INPUT ============
+                        elseif el.kind == "input" then
+                            render.add_text(ep, el.text, apply_alpha(Theme.TextDim, tab_alpha), 12)
+                            local box_pos = ep:add(vector2(0, 20))
+                            local box_size = vector2(ew, 24)
+                            local is_active = Light.ActiveInput == el
+                            render.add_rect_filled(box_pos, box_pos:add(box_size), apply_alpha(color(1, 1, 1, 0.04), tab_alpha), 6)
+                            render.add_rect(box_pos, box_pos:add(box_size), apply_alpha(is_active and Theme.Accent or Theme.Border, tab_alpha), 6, 1)
+                            local shown = #el.value > 0 and el.value or el.placeholder
+                            local tc = #el.value > 0 and Theme.Text or Theme.TextFaint
+                            render.add_text(box_pos:add(vector2(9, 5)), shown, apply_alpha(tc, tab_alpha), 13)
+                            if is_active and (math.floor(time * 2) % 2 == 0) then
+                                local tw2 = render.get_text_size(el.value).x
+                                render.add_line(box_pos:add(vector2(9 + tw2, 4)), box_pos:add(vector2(9 + tw2, box_size.y - 4)), apply_alpha(Theme.Text, tab_alpha), 1)
+                            end
 
+                            if mouse_clicked then
+                                if point_in_rect(mouse, box_pos, box_size) then Light.ActiveInput = el
+                                elseif Light.ActiveInput == el then Light.ActiveInput = nil end
+                            end
+
+                        -- ============ KEYBIND ============
+                        elseif el.kind == "keybind" then
+                            render.add_text(ep, el.text, apply_alpha(Theme.TextDim, tab_alpha), 12)
+                            local box_pos = ep:add(vector2(0, 20))
+                            local box_size = vector2(ew, 22)
+                            render.add_rect_filled(box_pos, box_pos:add(box_size), apply_alpha(color(1, 1, 1, 0.04), tab_alpha), 6)
+                            render.add_rect(box_pos, box_pos:add(box_size), apply_alpha(el.picking and Theme.Accent or Theme.Border, tab_alpha), 6, 1)
+                            local shown = el.picking and "press a key..." or (el.value .. "  [" .. el.mode .. "]")
+                            local tw3 = render.get_text_size(shown).x
+                            render.add_text(box_pos:add(vector2(box_size.x / 2 - tw3 / 2, 4)), shown, apply_alpha(Theme.Text, tab_alpha), 12)
+
+                            if mouse_clicked and hovered_this then el.picking = true end
+
+                        -- ============ COLOR PICKER ============
+                        elseif el.kind == "colorpicker" then
+                            render.add_text(ep:add(vector2(0, 4)), el.text, apply_alpha(Theme.Text, tab_alpha), 13)
+                            local box_size = vector2(20, 16)
+                            local box_pos = ep:add(vector2(ew - box_size.x, 2))
+                            render.add_rect_filled(box_pos, box_pos:add(box_size), apply_alpha(el.value, tab_alpha), 4)
+                            render.add_rect(box_pos, box_pos:add(box_size), apply_alpha(Theme.Border, tab_alpha), 4, 1)
+
+                            if mouse_clicked and point_in_rect(mouse, box_pos, box_size) then
+                                el.open = not el.open
+                                if el.open then
+                                    local h, s, v = 0, 0, 0
+                                    local maxc, minc = math.max(el.value.r, el.value.g, el.value.b), math.min(el.value.r, el.value.g, el.value.b)
+                                    v = maxc
+                                    local diff = maxc - minc
+                                    if maxc ~= 0 then s = diff / maxc end
+                                    if diff > 1e-5 then
+                                        if maxc == el.value.r then h = (el.value.g - el.value.b) / diff
+                                        elseif maxc == el.value.g then h = 2 + (el.value.b - el.value.r) / diff
+                                        else h = 4 + (el.value.r - el.value.g) / diff end
+                                        h = h / 6; if h < 0 then h = h + 1 end
+                                    end
+                                    el._h, el._s, el._v = h, s, v
+                                    Light.ActiveColorPicker = { obj = el, box_pos = box_pos }
+                                else
+                                    Light.ActiveColorPicker = nil
+                                end
+                            end
+
+                        -- ============ LABEL ============
+                        elseif el.kind == "label" then
+                            render.add_text(ep, el.text, apply_alpha(Theme.TextDim, tab_alpha), 13)
+
+                        -- ============ DIVIDER ============
                         elseif el.kind == "divider" then
                             local dy = ep.y + el.height / 2
-                            render.add_line(vector2(ep.x, dy), vector2(ep.x + ew, dy), theme.Border, 1)
+                            render.add_line(vector2(ep.x, dy), vector2(ep.x + ew, dy), apply_alpha(Theme.Border, tab_alpha), 1)
+
+                        -- ============ PROGRESS ============
+                        elseif el.kind == "progress" then
+                            render.add_text(ep, el.text, apply_alpha(Theme.TextDim, tab_alpha), 12)
+                            local track_pos = ep:add(vector2(0, 18))
+                            local track_size = vector2(ew, 10)
+                            render.add_rect_filled(track_pos, track_pos:add(track_size), apply_alpha(color(1, 1, 1, 0.06), tab_alpha), 5)
+                            local ratio = clamp01(el.value / el.max)
+                            el.anim = approach(el.anim, ratio, Theme.SliderSpeed * 0.6, dt)
+                            local fill_w = track_size.x * el.anim
+                            if fill_w > 0.5 then
+                                render.add_rect_filled(track_pos, track_pos:add(vector2(fill_w, track_size.y)), apply_alpha(Theme.Accent, tab_alpha), 5)
+                            end
                         end
 
                         element_y = element_y + el.height
                     end
 
-                    cursor_y = cursor_y + card_size.y + 10
+                    cursor_y = cursor_y + card_size.y + 12
                 end
             end
         end
     end
 
-    -- ── dropdown list overlay (drawn above everything, once) ──
-    if Nova.ActiveDropdown then
-        local el = Nova.ActiveDropdown
+    -- ==================== dropdown / multiselect overlay ====================
+    if Light.ActiveDropdown then
+        local el = Light.ActiveDropdown
         if el._list_pos then
             draw_shadow(el._list_pos, el._list_size, 6, 1)
-            render.add_rect_filled(el._list_pos, el._list_pos:add(el._list_size), Nova.Theme.Card, 6)
-            render.add_rect(el._list_pos, el._list_pos:add(el._list_size), Nova.Theme.Border, 6, 1)
+            render.add_rect_filled(el._list_pos, el._list_pos:add(el._list_size), Theme.Card, 6)
+            render.add_rect(el._list_pos, el._list_pos:add(el._list_size), Theme.Border, 6, 1)
 
             for i, option in ipairs(el.options) do
-                local item_pos = el._list_pos:add(vector2(2, (i - 1) * 22 + 2))
-                local item_size = vector2(el._list_size.x - 4, 20)
+                local item_pos = el._list_pos:add(vector2(3, (i - 1) * 24 + 3))
+                local item_size = vector2(el._list_size.x - 6, 22)
                 local is_hover = point_in_rect(mouse, item_pos, item_size)
-                local is_sel = el.index == i
+                local is_sel = el._multi and el.selected[i] or (not el._multi and el.index == i)
+
                 if is_hover or is_sel then
-                    render.add_rect_filled(item_pos, item_pos:add(item_size), Nova.Theme.AccentDim, 4)
+                    render.add_rect_filled(item_pos, item_pos:add(item_size), Theme.AccentDim, 4)
                 end
-                render.add_text(item_pos:add(vector2(6, 3)), option, is_sel and Nova.Theme.Accent or Nova.Theme.Text, 12)
+                render.add_text(item_pos:add(vector2(8, 4)), option, is_sel and Theme.Accent or Theme.Text, 12)
+                if el._multi and is_sel then
+                    render.add_text(item_pos:add(vector2(item_size.x - 16, 4)), "✓", Theme.Accent, 12)
+                end
+
                 if mouse_clicked and is_hover then
-                    el.index = i
-                    el.open = false
-                    Nova.ActiveDropdown = nil
-                    if el.callback then el.callback(i, option) end
+                    if el._multi then
+                        el.selected[i] = not el.selected[i]
+                        if el.callback then el.callback(el.selected) end
+                    else
+                        el.index = i
+                        el.open = false
+                        Light.ActiveDropdown = nil
+                        if el.callback then el.callback(i, option) end
+                    end
                 end
             end
 
             if mouse_clicked and not point_in_rect(mouse, el._list_pos, el._list_size) then
                 el.open = false
-                Nova.ActiveDropdown = nil
+                Light.ActiveDropdown = nil
             end
         end
     end
 
-    -- ── keybind capture (any window, any element) ──
-    for _, window in ipairs(Nova.Windows) do
+    -- ==================== color picker overlay ====================
+    if Light.ActiveColorPicker then
+        local ctx = Light.ActiveColorPicker
+        local el = ctx.obj
+        local pad, sv_dim, bar_w, gap = 10, 120, 12, 8
+        local panel_w = pad * 2 + sv_dim + gap + bar_w
+        local panel_h = pad * 2 + sv_dim
+        local screen = get_screen_size()
+        local panel_pos = ctx.box_pos:add(vector2(-panel_w - 8, 0))
+        if panel_pos.x < 4 then panel_pos = ctx.box_pos:add(vector2(28, 0)) end
+        if panel_pos.y + panel_h > screen.y - 4 then panel_pos = vector2(panel_pos.x, screen.y - panel_h - 4) end
+        ctx.panel_pos, ctx.panel_size = panel_pos, vector2(panel_w, panel_h)
+
+        draw_shadow(panel_pos, ctx.panel_size, 8, 1)
+        render.add_rect_filled(panel_pos, panel_pos:add(ctx.panel_size), Theme.Card, 8)
+        render.add_rect(panel_pos, panel_pos:add(ctx.panel_size), Theme.Border, 8, 1)
+
+        local sv_pos = panel_pos:add(vector2(pad, pad))
+        local sv_size = vector2(sv_dim, sv_dim)
+        local hue_rgb = color(1, 1, 1, 1)
+        do
+            local i = math.floor(el._h * 6) % 6
+            local f = el._h * 6 - math.floor(el._h * 6)
+            local p, q, t = 0, 1 - f, f
+            if i == 0 then hue_rgb = color(1, t, 0, 1)
+            elseif i == 1 then hue_rgb = color(q, 1, 0, 1)
+            elseif i == 2 then hue_rgb = color(0, 1, t, 1)
+            elseif i == 3 then hue_rgb = color(0, q, 1, 1)
+            elseif i == 4 then hue_rgb = color(t, 0, 1, 1)
+            else hue_rgb = color(1, 0, q, 1) end
+        end
+
+        render.add_rect_filled(sv_pos, sv_pos:add(sv_size), color(1, 1, 1, 1), 4)
+        for i = 0, sv_size.x - 1, 2 do
+            render.add_line(sv_pos:add(vector2(i, 0)), sv_pos:add(vector2(i, sv_size.y)), color(hue_rgb.r, hue_rgb.g, hue_rgb.b, i / sv_size.x), 2)
+        end
+        for i = 0, sv_size.y - 1, 2 do
+            render.add_line(sv_pos:add(vector2(0, i)), sv_pos:add(vector2(sv_size.x, i)), color(0, 0, 0, i / sv_size.y), 2)
+        end
+        render.add_rect(sv_pos, sv_pos:add(sv_size), Theme.Border, 4, 1)
+
+        local cursor = vector2(sv_pos.x + sv_size.x * el._s, sv_pos.y + sv_size.y * (1 - el._v))
+        render.add_circle(cursor, 5, el._v > 0.5 and color(0, 0, 0, 1) or color(1, 1, 1, 1), 2)
+
+        local hue_pos = panel_pos:add(vector2(pad + sv_dim + gap, pad))
+        local hue_size = vector2(bar_w, sv_dim)
+        for i = 0, hue_size.y - 1, 2 do
+            local hh = i / hue_size.y
+            local hc
+            local hi = math.floor(hh * 6) % 6
+            local hf = hh * 6 - math.floor(hh * 6)
+            local hp, hq, ht = 0, 1 - hf, hf
+            if hi == 0 then hc = color(1, ht, 0, 1)
+            elseif hi == 1 then hc = color(hq, 1, 0, 1)
+            elseif hi == 2 then hc = color(0, 1, ht, 1)
+            elseif hi == 3 then hc = color(0, hq, 1, 1)
+            elseif hi == 4 then hc = color(ht, 0, 1, 1)
+            else hc = color(1, 0, hq, 1) end
+            render.add_line(hue_pos:add(vector2(0, i)), hue_pos:add(vector2(hue_size.x, i)), hc, 2)
+        end
+        render.add_rect(hue_pos, hue_pos:add(hue_size), Theme.Border, 0, 1)
+        local hue_cursor_y = hue_pos.y + hue_size.y * el._h
+        render.add_rect(vector2(hue_pos.x - 2, hue_cursor_y - 2), vector2(hue_pos.x + hue_size.x + 2, hue_cursor_y + 2), color(1, 1, 1, 1), 2, 1)
+
+        ctx.sv_pos, ctx.sv_size, ctx.hue_pos, ctx.hue_size = sv_pos, sv_size, hue_pos, hue_size
+
+        if mouse_down then
+            if point_in_rect(mouse, sv_pos, sv_size) then
+                el._s = clamp01((mouse.x - sv_pos.x) / sv_size.x)
+                el._v = 1 - clamp01((mouse.y - sv_pos.y) / sv_size.y)
+                el.value = hue_rgb -- placeholder, replaced below with full hsv->rgb
+            elseif point_in_rect(mouse, hue_pos, hue_size) then
+                el._h = clamp01((mouse.y - hue_pos.y) / hue_size.y)
+            end
+
+            -- full HSV -> RGB using current h/s/v (kept outside the branch above
+            -- so dragging the SV square also respects the current hue correctly)
+            local i = math.floor(el._h * 6) % 6
+            local f = el._h * 6 - math.floor(el._h * 6)
+            local p = el._v * (1 - el._s)
+            local q = el._v * (1 - f * el._s)
+            local t = el._v * (1 - (1 - f) * el._s)
+            local r, g, b
+            if i == 0 then r, g, b = el._v, t, p
+            elseif i == 1 then r, g, b = q, el._v, p
+            elseif i == 2 then r, g, b = p, el._v, t
+            elseif i == 3 then r, g, b = p, q, el._v
+            elseif i == 4 then r, g, b = t, p, el._v
+            else r, g, b = el._v, p, q end
+            el.value = color(r, g, b, el.value.a or 1)
+            if el.callback then el.callback(el.value) end
+        end
+
+        if mouse_clicked and not point_in_rect(mouse, panel_pos, ctx.panel_size)
+           and not point_in_rect(mouse, ctx.box_pos, vector2(20, 16)) then
+            el.open = false
+            Light.ActiveColorPicker = nil
+        end
+    end
+
+    -- ==================== text input capture ====================
+    if Light.ActiveInput then
+        local el = Light.ActiveInput
+        for vk, ch in pairs(CHAR_MAP) do
+            if input.is_key_pressed(vk) then
+                el.value = el.value .. ch
+                if el.callback then el.callback(el.value) end
+                break
+            end
+        end
+        if input.is_key_pressed(0x08) and #el.value > 0 then
+            el.value = string.sub(el.value, 1, -2)
+            if el.callback then el.callback(el.value) end
+        end
+        if input.is_key_pressed(0x0D) or input.is_key_pressed(0x1B) then
+            Light.ActiveInput = nil
+        end
+    end
+
+    -- ==================== keybind capture ====================
+    for _, window in ipairs(Light.Windows) do
         if window.active_tab then
             for _, section in ipairs(window.active_tab.sections) do
                 for _, el in ipairs(section.elements) do
-                    if el.kind == "keybind" and el.picking then
-                        for vk = 0x01, 0xFE do
-                            if input.is_key_pressed(vk) then
-                                el.value = string.format("0x%02X", vk)
-                                el.picking = false
-                                if el.callback then el.callback(el.value) end
-                                break
+                    if el.kind == "keybind" then
+                        if el.picking then
+                            for vk, name in pairs(KEY_NAMES) do
+                                if input.is_key_pressed(vk) then
+                                    el.value = name
+                                    el.picking = false
+                                    if el.callback then el.callback(el.value) end
+                                    break
+                                end
+                            end
+                        elseif el.mode == "Toggle" and el.value ~= "..." then
+                            local vk = NAME_TO_KEY[el.value]
+                            if vk and input.is_key_pressed(vk) then
+                                el.active = not el.active
+                                if el.callback then el.callback(el.active) end
                             end
                         end
                     end
@@ -505,6 +1062,53 @@ hook.add("render", "novaui_render", function()
             end
         end
     end
+
+    -- ==================== tooltip ====================
+    Light.TooltipAlpha = approach(Light.TooltipAlpha or 0, Light.HoverTooltip and 1 or 0, 10, dt)
+    if Light.HoverTooltip and Light.TooltipAlpha > 0.02 then
+        local text = Light.HoverTooltip
+        local ts = render.get_text_size(text)
+        local size = vector2(ts.x + 14, ts.y + 10)
+        local pos = mouse:add(vector2(16, 16))
+        draw_shadow(pos, size, 6, Light.TooltipAlpha)
+        render.add_rect_filled(pos, pos:add(size), apply_alpha(Theme.Card, Light.TooltipAlpha), 6)
+        render.add_rect(pos, pos:add(size), apply_alpha(Theme.Border, Light.TooltipAlpha), 6, 1)
+        render.add_text(pos:add(vector2(7, 5)), text, apply_alpha(Theme.Text, Light.TooltipAlpha), 12)
+    end
+    Light.HoverTooltip = nil
+
+    -- ==================== notifications ====================
+    local screen = get_screen_size()
+    local nx, ny = screen.x - 300, 46
+    local run_y = 0
+    for i = #Light.Notifications, 1, -1 do
+        local n = Light.Notifications[i]
+        n.elapsed = n.elapsed + dt
+        local target_alpha = (n.elapsed < n.duration) and 1 or 0
+        n.alpha = approach(n.alpha, target_alpha, 8, dt)
+        n.offset = approach(n.offset, target_alpha > 0 and 0 or 24, 8, dt)
+
+        if n.alpha < 0.01 and target_alpha == 0 then
+            table.remove(Light.Notifications, i)
+        else
+            local accent_c = Theme.Accent
+            if n.kind == "success" then accent_c = Theme.Success
+            elseif n.kind == "warning" then accent_c = Theme.Warning
+            elseif n.kind == "danger" then accent_c = Theme.Danger end
+
+            local ts = render.get_text_size(n.text)
+            local size = vector2(ts.x + 30, 32)
+            local pos = vector2(nx + n.offset, ny + run_y)
+
+            draw_shadow(pos, size, 7, n.alpha)
+            render.add_rect_filled(pos, pos:add(size), apply_alpha(Theme.Card, n.alpha), 7)
+            render.add_rect(pos, pos:add(size), apply_alpha(Theme.Border, n.alpha), 7, 1)
+            render.add_rect_filled(pos:add(vector2(0, 4)), pos:add(vector2(3, size.y - 4)), apply_alpha(accent_c, n.alpha), 2)
+            render.add_text(pos:add(vector2(14, 9)), n.text, apply_alpha(Theme.Text, n.alpha), 13)
+
+            run_y = run_y + size.y + 8
+        end
+    end
 end)
 
-return Nova
+return Light
