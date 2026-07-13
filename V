@@ -22,7 +22,7 @@
 
 local Nova = {
     Theme = {
-        Background = color(0.02, 0.02, 0.03, 0.55),  -- window fill, very transparent
+        Background = color(0.02, 0.02, 0.03, 1),  -- window fill, very transparent
         Sidebar    = color(0.02, 0.02, 0.03, 0.35),  -- sidebar fill, near see-through
         Card       = color(0.04, 0.04, 0.05, 0.45),  -- section/card fill
         CardGlass  = color(1, 1, 1, 0.03),           -- glass overlay layer
