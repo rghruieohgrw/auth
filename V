@@ -88,16 +88,16 @@ end
 -- ========================================================================
 
 local Theme = {
-    Background   = color(0.03, 0.03, 0.035, 0.75),
-    Sidebar      = color(0.02, 0.02, 0.025, 0.55),
-    Card         = color(0.05, 0.05, 0.06, 0.55),
-    CardGlass    = color(1, 1, 1, 0.035),
-    Border       = color(1, 1, 1, 0.06),
-    BorderBright = color(1, 1, 1, 0.14),
+    Background   = color(0.04, 0.04, 0.05, 0.96),
+    Sidebar      = color(0.03, 0.03, 0.035, 0.9),
+    Card         = color(0.07, 0.07, 0.08, 0.92),
+    CardGlass    = color(1, 1, 1, 0.05),
+    Border       = color(1, 1, 1, 0.10),
+    BorderBright = color(1, 1, 1, 0.22),
 
-    Text     = color():hex(0xE7E9EE),
-    TextDim  = color():hex(0x82868F),
-    TextFaint= color(1, 1, 1, 0.35),
+    Text     = color():hex(0xF5F6F8),
+    TextDim  = color():hex(0xA8ACB6),
+    TextFaint= color(1, 1, 1, 0.45),
 
     Accent    = color():hex(0x9BBCFF),
     AccentDim = color(0.608, 0.737, 1.0, 0.16),
