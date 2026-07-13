@@ -1,0 +1,510 @@
+--[[
+    ====================================================================
+    NovaUI — custom-rendered Lua UI library for Photon
+    Black background / #9bbcff accent, sidebar-tab layout, glass panels
+    ====================================================================
+
+    This is a from-scratch library (not AUTHui) built entirely on the
+    `render` / `input` / `hook` API surface. Layout philosophy:
+
+      Window
+        └─ Sidebar (fixed-width, left edge)  — icon + label per tab,
+           animated sliding highlight, hover glow
+        └─ Content area (right of sidebar)   — single active tab's
+           sections stack vertically, each section is a "glass" card
+
+    "Glass" panels are faked the same way AUTHui's shadows are faked:
+    layered semi-transparent rects at slightly offset sizes, since the
+    render API has no native blur.
+
+    Everything lives under the `Nova` table returned at the bottom.
+]]
+
+local Nova = {
+    Theme = {
+        Background = color():hex(0x0A0A0C),   -- window fill
+        Sidebar    = color():hex(0x0D0D10),   -- sidebar fill (marginally lighter)
+        Card       = color():hex(0x131316),   -- section/card fill
+        CardGlass  = color(1, 1, 1, 0.02),    -- glass overlay layer
+        Border     = color(1, 1, 1, 0.06),
+        Text       = color():hex(0xE7E9EE),
+        TextDim    = color():hex(0x7C818C),
+        Accent     = color():hex(0x9BBCFF),
+        AccentDim  = color(0.608, 0.737, 1.0, 0.14),
+        Danger     = color(1, 0.35, 0.4, 1),
+
+        SidebarWidth  = 180,
+        Rounding      = 10,
+        TabHeight     = 42,
+        AnimSpeed     = 10, -- higher = snappier lerp
+    },
+
+    Windows = {},
+    ActiveDrag = nil,      -- window being dragged
+    ActiveSlider = nil,    -- {obj, section, track_pos, track_size}
+    ActiveDropdown = nil,  -- element currently showing its list
+    MouseWasDown = false,
+}
+
+-- ========================================================================
+-- helpers
+-- ========================================================================
+
+local function approach(current, target, speed, dt)
+    return current + (target - current) * math.min(speed * dt, 1)
+end
+
+local function apply_alpha(c, mult)
+    return color(c.r, c.g, c.b, (c.a or 1) * mult)
+end
+
+local function point_in_rect(point, pos, size)
+    return point.x >= pos.x and point.x <= pos.x + size.x
+       and point.y >= pos.y and point.y <= pos.y + size.y
+end
+
+-- Fakes a soft drop shadow with a handful of expanding, fading rects.
+local function draw_shadow(pos, size, rounding, alpha_mult)
+    for i = 1, 6 do
+        local spread = i * 2
+        local a = (1 - i / 6) * 0.14 * alpha_mult
+        local sp = pos:subtract(vector2(spread, spread * 0.6))
+        local ss = size:add(vector2(spread * 2, spread * 2))
+        render.add_rect_filled(sp, sp:add(ss), color(0, 0, 0, a), rounding + spread)
+    end
+end
+
+-- Fakes a subtle "glass" texture: a base fill plus a soft top highlight band.
+local function draw_glass(pos, size, base_color, rounding, alpha_mult)
+    render.add_rect_filled(pos, pos:add(size), apply_alpha(base_color, alpha_mult), rounding)
+    local highlight_h = math.min(size.y * 0.4, 40)
+    render.add_rect_filled(
+        pos, pos:add(vector2(size.x, highlight_h)),
+        apply_alpha(Nova.Theme.CardGlass, alpha_mult), rounding
+    )
+    render.add_rect(pos, pos:add(size), apply_alpha(Nova.Theme.Border, alpha_mult), rounding, 1)
+end
+
+-- ========================================================================
+-- element constructors
+-- these just build plain data tables; all interactivity happens in the
+-- single shared render hook below, keeping per-element code tiny.
+-- ========================================================================
+
+local function new_toggle(text, default, callback)
+    return {
+        kind = "toggle", text = text, value = default or false,
+        callback = callback, anim = default and 1 or 0, height = 30,
+    }
+end
+
+local function new_slider(text, min, max, default, suffix, callback)
+    return {
+        kind = "slider", text = text, min = min, max = max,
+        value = default or min, suffix = suffix or "", callback = callback,
+        anim = (default - min) / (max - min), height = 46,
+    }
+end
+
+local function new_button(text, func)
+    return { kind = "button", text = text, func = func, hover_anim = 0, height = 30 }
+end
+
+local function new_dropdown(text, options, default_index, callback)
+    return {
+        kind = "dropdown", text = text, options = options,
+        index = default_index or 1, open = false, callback = callback, height = 46,
+    }
+end
+
+local function new_keybind(text, default_name, callback)
+    return {
+        kind = "keybind", text = text, value = default_name or "...",
+        picking = false, callback = callback, height = 40,
+    }
+end
+
+local function new_label(text)
+    return { kind = "label", text = text, height = 24 }
+end
+
+local function new_divider()
+    return { kind = "divider", height = 14 }
+end
+
+-- ========================================================================
+-- section (card) — owns a list of elements
+-- ========================================================================
+
+local SectionMethods = {}
+SectionMethods.__index = SectionMethods
+
+function SectionMethods:AddToggle(text, default, callback)
+    local el = new_toggle(text, default, callback)
+    table.insert(self.elements, el)
+    return el
+end
+
+function SectionMethods:AddSlider(text, min, max, default, suffix, callback)
+    local el = new_slider(text, min, max, default, suffix, callback)
+    table.insert(self.elements, el)
+    return el
+end
+
+function SectionMethods:AddButton(text, func)
+    local el = new_button(text, func)
+    table.insert(self.elements, el)
+    return el
+end
+
+function SectionMethods:AddDropdown(text, options, default_index, callback)
+    local el = new_dropdown(text, options, default_index, callback)
+    table.insert(self.elements, el)
+    return el
+end
+
+function SectionMethods:AddKeybind(text, default_name, callback)
+    local el = new_keybind(text, default_name, callback)
+    table.insert(self.elements, el)
+    return el
+end
+
+function SectionMethods:AddLabel(text)
+    local el = new_label(text)
+    table.insert(self.elements, el)
+    return el
+end
+
+function SectionMethods:AddDivider()
+    local el = new_divider()
+    table.insert(self.elements, el)
+    return el
+end
+
+-- ========================================================================
+-- tab — owns a list of sections, lives in the sidebar
+-- ========================================================================
+
+local TabMethods = {}
+TabMethods.__index = TabMethods
+
+function TabMethods:AddSection(name)
+    local section = setmetatable({ name = name, elements = {} }, SectionMethods)
+    table.insert(self.sections, section)
+    return section
+end
+
+-- ========================================================================
+-- window
+-- ========================================================================
+
+local WindowMethods = {}
+WindowMethods.__index = WindowMethods
+
+function WindowMethods:AddTab(name, icon)
+    local tab = setmetatable({ name = name, icon = icon or "•", sections = {} }, TabMethods)
+    table.insert(self.tabs, tab)
+    if not self.active_tab then self.active_tab = tab end
+    return tab
+end
+
+function Nova.CreateWindow(config)
+    local screen = get_screen_size()
+    local size = config.size or vector2(620, 440)
+    local pos = config.pos or vector2((screen.x - size.x) / 2, (screen.y - size.y) / 2)
+
+    local window = setmetatable({
+        title = config.title or "Nova",
+        pos = pos,
+        size = size,
+        visible = config.visible ~= false,
+        tabs = {},
+        active_tab = nil,
+        highlight_y = 0,   -- animated sidebar highlight position
+    }, WindowMethods)
+
+    table.insert(Nova.Windows, window)
+    return window
+end
+
+-- ========================================================================
+-- render hook — draws every window and handles all input in one pass
+-- ========================================================================
+
+hook.add("render", "novaui_render", function()
+    local dt = render.deltatime()
+    local theme = Nova.Theme
+    local mouse = input.get_mouse_position()
+    local mouse_down = input.key_down(0x01)
+    local mouse_clicked = mouse_down and not Nova.MouseWasDown
+    Nova.MouseWasDown = mouse_down
+
+    -- window drag release
+    if Nova.ActiveDrag and not mouse_down then
+        Nova.ActiveDrag = nil
+    end
+
+    -- slider drag release
+    if Nova.ActiveSlider and not mouse_down then
+        Nova.ActiveSlider = nil
+    end
+
+    for _, window in ipairs(Nova.Windows) do
+        if window.visible then
+            local pos, size = window.pos, window.size
+
+            -- window drag
+            local title_bar_size = vector2(size.x, 34)
+            if mouse_clicked and point_in_rect(mouse, pos, title_bar_size)
+               and not Nova.ActiveDrag and not Nova.ActiveDropdown then
+                Nova.ActiveDrag = { window = window, offset = mouse:subtract(pos) }
+            end
+            if Nova.ActiveDrag and Nova.ActiveDrag.window == window then
+                window.pos = mouse:subtract(Nova.ActiveDrag.offset)
+                pos = window.pos
+            end
+
+            -- outer shadow + base panel
+            draw_shadow(pos, size, theme.Rounding, 1)
+            render.add_rect_filled(pos, pos:add(size), theme.Background, theme.Rounding)
+            render.add_rect(pos, pos:add(size), theme.Border, theme.Rounding, 1)
+            render.add_text(pos:add(vector2(theme.SidebarWidth + 16, 10)), window.title, theme.Text, 15)
+
+            -- ── sidebar ──
+            local sidebar_pos = pos
+            local sidebar_size = vector2(theme.SidebarWidth, size.y)
+            render.add_rect_filled(sidebar_pos, sidebar_pos:add(sidebar_size), theme.Sidebar, theme.Rounding)
+            render.add_line(
+                sidebar_pos:add(vector2(theme.SidebarWidth, 8)),
+                sidebar_pos:add(vector2(theme.SidebarWidth, size.y - 8)),
+                theme.Border, 1
+            )
+
+            local list_top = 18
+            local target_highlight_y = list_top + 0
+            local hovered_tab = nil
+
+            for i, tab in ipairs(window.tabs) do
+                local row_y = list_top + (i - 1) * theme.TabHeight
+                local row_pos = sidebar_pos:add(vector2(8, row_y))
+                local row_size = vector2(theme.SidebarWidth - 16, theme.TabHeight - 6)
+
+                if point_in_rect(mouse, row_pos, row_size) then
+                    hovered_tab = tab
+                    render.add_rect_filled(row_pos, row_pos:add(row_size), color(1, 1, 1, 0.03), theme.Rounding - 3)
+                    if mouse_clicked then window.active_tab = tab end
+                end
+
+                if window.active_tab == tab then
+                    target_highlight_y = row_y
+                end
+            end
+
+            window.highlight_y = approach(window.highlight_y, target_highlight_y, theme.AnimSpeed, dt)
+
+            local hl_pos = sidebar_pos:add(vector2(8, window.highlight_y))
+            local hl_size = vector2(theme.SidebarWidth - 16, theme.TabHeight - 6)
+            render.add_rect_filled(hl_pos, hl_pos:add(hl_size), theme.AccentDim, theme.Rounding - 3)
+            render.add_rect_filled(hl_pos, hl_pos:add(vector2(3, hl_size.y)), theme.Accent, 2)
+
+            for i, tab in ipairs(window.tabs) do
+                local row_y = list_top + (i - 1) * theme.TabHeight
+                local is_active = window.active_tab == tab
+                local text_color = is_active and theme.Accent
+                    or (tab == hovered_tab and theme.Text or theme.TextDim)
+                render.add_text(sidebar_pos:add(vector2(20, row_y + 12)), tab.icon, text_color, 13)
+                render.add_text(sidebar_pos:add(vector2(44, row_y + 12)), tab.name, text_color, 13)
+            end
+
+            -- ── content area ──
+            local content_pos = pos:add(vector2(theme.SidebarWidth + 14, 40))
+            local content_width = size.x - theme.SidebarWidth - 28
+
+            if window.active_tab then
+                local cursor_y = 0
+                for _, section in ipairs(window.active_tab.sections) do
+                    local card_pos = content_pos:add(vector2(0, cursor_y))
+
+                    local inner_height = 32
+                    for _, el in ipairs(section.elements) do inner_height = inner_height + el.height end
+                    local card_size = vector2(content_width, inner_height)
+
+                    draw_glass(card_pos, card_size, theme.Card, theme.Rounding - 2, 1)
+                    render.add_text(card_pos:add(vector2(12, 9)), section.name, theme.Text, 13)
+
+                    local element_y = 30
+                    for _, el in ipairs(section.elements) do
+                        local ep = card_pos:add(vector2(12, element_y))
+                        local ew = card_size.x - 24
+
+                        if el.kind == "toggle" then
+                            local target = el.value and 1 or 0
+                            el.anim = approach(el.anim, target, theme.AnimSpeed, dt)
+                            local sw_pos = ep:add(vector2(0, 4))
+                            local sw_size = vector2(30, 16)
+                            local base = color(0.08, 0.08, 0.10, 1)
+                            local track = color(
+                                base.r + (theme.Accent.r - base.r) * el.anim,
+                                base.g + (theme.Accent.g - base.g) * el.anim,
+                                base.b + (theme.Accent.b - base.b) * el.anim, 1
+                            )
+                            render.add_rect_filled(sw_pos, sw_pos:add(sw_size), track, 8)
+                            render.add_rect(sw_pos, sw_pos:add(sw_size), theme.Border, 8, 1)
+                            local knob_x = sw_pos.x + 2 + (sw_size.x - 12) * el.anim
+                            render.add_circle_filled(vector2(knob_x + 5, sw_pos.y + 8), 5, theme.Text)
+                            render.add_text(ep:add(vector2(38, 2)), el.text, theme.Text, 13)
+
+                            if mouse_clicked and point_in_rect(mouse, ep, vector2(ew, 22)) then
+                                el.value = not el.value
+                                if el.callback then el.callback(el.value) end
+                            end
+
+                        elseif el.kind == "slider" then
+                            render.add_text(ep, el.text, theme.TextDim, 12)
+                            local track_pos = ep:add(vector2(0, 20))
+                            local track_size = vector2(ew, 6)
+                            local ratio = (el.value - el.min) / (el.max - el.min)
+
+                            render.add_rect_filled(track_pos, track_pos:add(track_size), color(1, 1, 1, 0.06), 3)
+                            local fill_w = track_size.x * ratio
+                            if fill_w > 0 then
+                                render.add_rect_filled(track_pos, track_pos:add(vector2(fill_w, track_size.y)), theme.Accent, 3)
+                            end
+                            local knob_x = track_pos.x + fill_w
+                            render.add_circle_filled(vector2(knob_x, track_pos.y + 3), 6, theme.Text)
+
+                            local val_text = tostring(math.floor(el.value * 100 + 0.5) / 100) .. el.suffix
+                            render.add_text(track_pos:add(vector2(track_size.x - render.get_text_size(val_text).x, -18)), val_text, theme.TextDim, 12)
+
+                            local hit_pos = track_pos:subtract(vector2(0, 6))
+                            local hit_size = vector2(track_size.x, 18)
+                            if mouse_clicked and point_in_rect(mouse, hit_pos, hit_size) and not Nova.ActiveSlider then
+                                Nova.ActiveSlider = { obj = el, track_pos = track_pos, track_size = track_size }
+                            end
+                            if Nova.ActiveSlider and Nova.ActiveSlider.obj == el then
+                                local r = math.clamp((mouse.x - track_pos.x) / track_size.x, 0, 1)
+                                local new_val = el.min + (el.max - el.min) * r
+                                if new_val ~= el.value then
+                                    el.value = new_val
+                                    if el.callback then el.callback(el.value) end
+                                end
+                            end
+
+                        elseif el.kind == "button" then
+                            local is_hover = point_in_rect(mouse, ep, vector2(ew, 26))
+                            el.hover_anim = approach(el.hover_anim, is_hover and 1 or 0, theme.AnimSpeed, dt)
+                            local bg = color(
+                                0.08 + (theme.Accent.r - 0.08) * el.hover_anim * 0.25,
+                                0.08 + (theme.Accent.g - 0.08) * el.hover_anim * 0.25,
+                                0.10 + (theme.Accent.b - 0.10) * el.hover_anim * 0.25, 1
+                            )
+                            render.add_rect_filled(ep, ep:add(vector2(ew, 26)), bg, 6)
+                            render.add_rect(ep, ep:add(vector2(ew, 26)), theme.Border, 6, 1)
+                            local tw = render.get_text_size(el.text).x
+                            render.add_text(ep:add(vector2(ew / 2 - tw / 2, 6)), el.text, theme.Text, 13)
+
+                            if mouse_clicked and is_hover and el.func then el.func() end
+
+                        elseif el.kind == "dropdown" then
+                            render.add_text(ep, el.text, theme.TextDim, 12)
+                            local box_pos = ep:add(vector2(0, 18))
+                            local box_size = vector2(ew, 24)
+                            render.add_rect_filled(box_pos, box_pos:add(box_size), color(1, 1, 1, 0.04), 6)
+                            render.add_rect(box_pos, box_pos:add(box_size), theme.Border, 6, 1)
+                            render.add_text(box_pos:add(vector2(8, 4)), el.options[el.index], theme.Text, 13)
+
+                            if mouse_clicked and point_in_rect(mouse, box_pos, box_size) then
+                                el.open = not el.open
+                                Nova.ActiveDropdown = el.open and el or nil
+                            end
+
+                            if el.open then
+                                el._list_pos = box_pos:add(vector2(0, box_size.y + 2))
+                                el._list_size = vector2(box_size.x, #el.options * 22 + 4)
+                            end
+
+                        elseif el.kind == "keybind" then
+                            render.add_text(ep, el.text, theme.TextDim, 12)
+                            local box_pos = ep:add(vector2(0, 18))
+                            local box_size = vector2(ew, 22)
+                            render.add_rect_filled(box_pos, box_pos:add(box_size), color(1, 1, 1, 0.04), 6)
+                            render.add_rect(box_pos, box_pos:add(box_size),
+                                el.picking and theme.Accent or theme.Border, 6, 1)
+                            local label = el.picking and "press a key..." or el.value
+                            render.add_text(box_pos:add(vector2(box_size.x / 2 - render.get_text_size(label).x / 2, 3)), label, theme.Text, 12)
+
+                            if mouse_clicked and point_in_rect(mouse, box_pos, box_size) then
+                                el.picking = true
+                            end
+
+                        elseif el.kind == "label" then
+                            render.add_text(ep, el.text, theme.Text, 13)
+
+                        elseif el.kind == "divider" then
+                            local dy = ep.y + el.height / 2
+                            render.add_line(vector2(ep.x, dy), vector2(ep.x + ew, dy), theme.Border, 1)
+                        end
+
+                        element_y = element_y + el.height
+                    end
+
+                    cursor_y = cursor_y + card_size.y + 10
+                end
+            end
+        end
+    end
+
+    -- ── dropdown list overlay (drawn above everything, once) ──
+    if Nova.ActiveDropdown then
+        local el = Nova.ActiveDropdown
+        if el._list_pos then
+            draw_shadow(el._list_pos, el._list_size, 6, 1)
+            render.add_rect_filled(el._list_pos, el._list_pos:add(el._list_size), Nova.Theme.Card, 6)
+            render.add_rect(el._list_pos, el._list_pos:add(el._list_size), Nova.Theme.Border, 6, 1)
+
+            for i, option in ipairs(el.options) do
+                local item_pos = el._list_pos:add(vector2(2, (i - 1) * 22 + 2))
+                local item_size = vector2(el._list_size.x - 4, 20)
+                local is_hover = point_in_rect(mouse, item_pos, item_size)
+                local is_sel = el.index == i
+                if is_hover or is_sel then
+                    render.add_rect_filled(item_pos, item_pos:add(item_size), Nova.Theme.AccentDim, 4)
+                end
+                render.add_text(item_pos:add(vector2(6, 3)), option, is_sel and Nova.Theme.Accent or Nova.Theme.Text, 12)
+                if mouse_clicked and is_hover then
+                    el.index = i
+                    el.open = false
+                    Nova.ActiveDropdown = nil
+                    if el.callback then el.callback(i, option) end
+                end
+            end
+
+            if mouse_clicked and not point_in_rect(mouse, el._list_pos, el._list_size) then
+                el.open = false
+                Nova.ActiveDropdown = nil
+            end
+        end
+    end
+
+    -- ── keybind capture (any window, any element) ──
+    for _, window in ipairs(Nova.Windows) do
+        if window.active_tab then
+            for _, section in ipairs(window.active_tab.sections) do
+                for _, el in ipairs(section.elements) do
+                    if el.kind == "keybind" and el.picking then
+                        for vk = 0x01, 0xFE do
+                            if input.is_key_pressed(vk) then
+                                el.value = string.format("0x%02X", vk)
+                                el.picking = false
+                                if el.callback then el.callback(el.value) end
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+return Nova
