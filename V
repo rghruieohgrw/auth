@@ -22,20 +22,20 @@
 
 local Nova = {
     Theme = {
-        Background = color():hex(0x0A0A0C),   -- window fill
-        Sidebar    = color():hex(0x0D0D10),   -- sidebar fill (marginally lighter)
-        Card       = color():hex(0x131316),   -- section/card fill
-        CardGlass  = color(1, 1, 1, 0.02),    -- glass overlay layer
-        Border     = color(1, 1, 1, 0.06),
+        Background = color(0.02, 0.02, 0.03, 0.55),  -- window fill, very transparent
+        Sidebar    = color(0.02, 0.02, 0.03, 0.35),  -- sidebar fill, near see-through
+        Card       = color(0.04, 0.04, 0.05, 0.45),  -- section/card fill
+        CardGlass  = color(1, 1, 1, 0.03),           -- glass overlay layer
+        Border     = color(1, 1, 1, 0.05),
         Text       = color():hex(0xE7E9EE),
         TextDim    = color():hex(0x7C818C),
         Accent     = color():hex(0x9BBCFF),
         AccentDim  = color(0.608, 0.737, 1.0, 0.14),
         Danger     = color(1, 0.35, 0.4, 1),
 
-        SidebarWidth  = 180,
+        SidebarWidth  = 60,
         Rounding      = 10,
-        TabHeight     = 42,
+        TabHeight     = 48,
         AnimSpeed     = 10, -- higher = snappier lerp
     },
 
@@ -268,7 +268,7 @@ hook.add("render", "novaui_render", function()
             draw_shadow(pos, size, theme.Rounding, 1)
             render.add_rect_filled(pos, pos:add(size), theme.Background, theme.Rounding)
             render.add_rect(pos, pos:add(size), theme.Border, theme.Rounding, 1)
-            render.add_text(pos:add(vector2(theme.SidebarWidth + 16, 10)), window.title, theme.Text, 15)
+            render.add_text(pos:add(vector2(theme.SidebarWidth + 16, 10)), window.title, apply_alpha(theme.Text, 0.9), 15)
 
             -- ── sidebar ──
             local sidebar_pos = pos
@@ -312,8 +312,8 @@ hook.add("render", "novaui_render", function()
                 local is_active = window.active_tab == tab
                 local text_color = is_active and theme.Accent
                     or (tab == hovered_tab and theme.Text or theme.TextDim)
-                render.add_text(sidebar_pos:add(vector2(20, row_y + 12)), tab.icon, text_color, 13)
-                render.add_text(sidebar_pos:add(vector2(44, row_y + 12)), tab.name, text_color, 13)
+                local icon_w = render.get_text_size(tab.icon).x
+                render.add_text(sidebar_pos:add(vector2((theme.SidebarWidth - icon_w) / 2, row_y + 15)), tab.icon, text_color, 15)
             end
 
             -- ── content area ──
